@@ -1,0 +1,5 @@
+{
+  "name": "Local CVE Tracker",
+  "description": "A single-user CVE tracking dashboard using local git-based ingestion from cvelistV5 (JSON 5.0). Features watchlists, alerts, and job monitoring.",
+  "requestFramePermissions": []
+}
