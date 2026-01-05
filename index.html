@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LocalCVE • Security Intelligence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "recharts": "https://esm.sh/recharts@^3.6.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+  }
+}
+</script>
+<style>
+  :root {
+    --cyber-bg: #0a0e1a;
+    --cyber-surface: #111827;
+    --cyber-border: #1f2937;
+    --cyber-accent: #06b6d4;
+    --cyber-accent-bright: #22d3ee;
+    --cyber-danger: #ef4444;
+    --cyber-warning: #f59e0b;
+    --cyber-success: #10b981;
+    --cyber-text: #f3f4f6;
+    --cyber-text-dim: #9ca3af;
+    --grid-color: rgba(6, 182, 212, 0.03);
+  }
+
+  * {
+    font-feature-settings: "ss01", "cv01";
+  }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--cyber-bg);
+    color: var(--cyber-text);
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* Cyberpunk grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image:
+      linear-gradient(var(--grid-color) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+    background-size: 50px 50px;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+  }
+
+  /* Subtle scan line effect */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(90deg,
+      transparent,
+      var(--cyber-accent-bright),
+      transparent
+    );
+    animation: scan 8s linear infinite;
+    pointer-events: none;
+    z-index: 100;
+    opacity: 0.3;
+  }
+
+  @keyframes scan {
+    0% { transform: translateY(0); opacity: 0; }
+    10% { opacity: 0.3; }
+    90% { opacity: 0.3; }
+    100% { transform: translateY(100vh); opacity: 0; }
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
+  .mono {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+  }
+
+  /* Custom glow effects */
+  .glow-accent {
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.3);
+  }
+
+  .glow-danger {
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+  }
+
+  /* Animated gradient borders */
+  @keyframes border-rotate {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  .border-glow {
+    position: relative;
+    background: var(--cyber-surface);
+  }
+
+  .border-glow::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    background: linear-gradient(
+      45deg,
+      var(--cyber-accent),
+      var(--cyber-accent-bright),
+      var(--cyber-accent)
+    );
+    background-size: 200% 200%;
+    animation: border-rotate 3s linear infinite;
+    border-radius: inherit;
+    z-index: -1;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .border-glow:hover::before {
+    opacity: 0.5;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--cyber-surface);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--cyber-border);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--cyber-accent);
+  }
+
+  /* Smooth transitions */
+  * {
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+  }
+</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
