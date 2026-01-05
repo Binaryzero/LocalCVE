@@ -8,7 +8,9 @@
       "mcp__plugin_greptile_greptile__list_pull_requests",
       "Bash(test:*)",
       "Bash(cat:*)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)"
     ]
   },
   "outputStyle": "Explanatory"
