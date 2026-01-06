@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, ShieldAlert, Bell, Activity, Database, Menu, X } from 'lucide-react';
+import { LayoutDashboard, ShieldAlert, Bell, Activity, Database, Menu, X, Terminal } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -16,48 +16,106 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => 
         onNavigate(id);
         setIsMobileMenuOpen(false);
       }}
-      className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-colors duration-150 ${
+      className={`group w-full flex items-center px-4 py-3 text-sm font-medium transition-all duration-200 relative overflow-hidden ${
         activePage === id
-          ? 'bg-blue-50 text-blue-700'
-          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+          ? 'text-cyan-400'
+          : 'text-gray-400 hover:text-cyan-300'
       }`}
     >
-      <Icon className={`mr-3 h-5 w-5 ${activePage === id ? 'text-blue-700' : 'text-gray-400'}`} />
-      {label}
+      {/* Active indicator */}
+      <div className={`absolute left-0 top-0 h-full w-1 bg-gradient-to-b from-cyan-400 to-cyan-600 transition-all duration-300 ${
+        activePage === id ? 'opacity-100' : 'opacity-0'
+      }`} />
+
+      {/* Hover background */}
+      <div className={`absolute inset-0 bg-gradient-to-r from-cyan-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${
+        activePage === id ? 'opacity-100' : ''
+      }`} />
+
+      <Icon className={`relative z-10 mr-3 h-5 w-5 transition-transform duration-200 group-hover:scale-110 ${
+        activePage === id ? 'text-cyan-400' : 'text-gray-500 group-hover:text-cyan-400'
+      }`} />
+      <span className="relative z-10 mono tracking-wide">{label}</span>
+
+      {/* Glitch effect on active */}
+      {activePage === id && (
+        <div className="absolute right-4 w-2 h-2 bg-cyan-400 rounded-full animate-pulse" />
+      )}
     </button>
   );
 
   return (
-    <div className="min-h-screen flex bg-gray-50">
+    <div className="min-h-screen flex" style={{ background: 'var(--cyber-bg)' }}>
       {/* Sidebar for Desktop */}
-      <div className="hidden md:flex flex-col w-64 bg-white border-r border-gray-200 fixed h-full z-10">
-        <div className="flex items-center h-16 px-6 border-b border-gray-200">
-          <ShieldAlert className="h-8 w-8 text-blue-600 mr-2" />
-          <span className="text-xl font-bold text-gray-800">CVE Tracker</span>
+      <div className="hidden md:flex flex-col w-72 border-r fixed h-full z-10" style={{
+        background: 'var(--cyber-surface)',
+        borderColor: 'var(--cyber-border)'
+      }}>
+        {/* Header */}
+        <div className="flex items-center h-20 px-6 border-b relative" style={{ borderColor: 'var(--cyber-border)' }}>
+          <div className="flex items-center space-x-3">
+            <div className="relative">
+              <ShieldAlert className="h-9 w-9 text-cyan-400" strokeWidth={1.5} />
+              <div className="absolute inset-0 bg-cyan-400/20 blur-xl rounded-full" />
+            </div>
+            <div>
+              <span className="mono text-xl font-bold text-gray-100 tracking-tight">LOCAL<span className="text-cyan-400">CVE</span></span>
+              <div className="flex items-center space-x-1 mt-0.5">
+                <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                <span className="text-xs text-gray-500 mono">ONLINE</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <nav className="flex-1 px-4 py-6 space-y-1">
-          <NavItem id="dashboard" label="Dashboard" icon={LayoutDashboard} />
-          <NavItem id="cves" label="CVEs" icon={Database} />
-          <NavItem id="watchlists" label="Watchlists" icon={Activity} />
-          <NavItem id="alerts" label="Alerts" icon={Bell} />
-          <NavItem id="jobs" label="Jobs" icon={Activity} />
+
+        {/* Navigation */}
+        <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
+          <div className="mb-4">
+            <div className="px-4 mb-2 text-xs font-semibold text-gray-600 uppercase tracking-wider mono">
+              Surveillance
+            </div>
+            <NavItem id="dashboard" label="Overview" icon={LayoutDashboard} />
+            <NavItem id="cves" label="Threats" icon={Database} />
+            <NavItem id="alerts" label="Alerts" icon={Bell} />
+          </div>
+
+          <div className="mb-4">
+            <div className="px-4 mb-2 text-xs font-semibold text-gray-600 uppercase tracking-wider mono">
+              Operations
+            </div>
+            <NavItem id="watchlists" label="Watchlists" icon={Activity} />
+            <NavItem id="jobs" label="Ingestion" icon={Terminal} />
+          </div>
         </nav>
-        <div className="p-4 border-t border-gray-200">
-          <p className="text-xs text-gray-500">Local Single-User Mode</p>
-          <p className="text-xs text-gray-400 mt-1">v1.0.0</p>
+
+        {/* Footer Status */}
+        <div className="p-4 border-t" style={{ borderColor: 'var(--cyber-border)' }}>
+          <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-800">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-gray-400 mono">SYSTEM STATUS</p>
+              <div className="flex items-center space-x-1">
+                <div className="w-1 h-1 bg-green-400 rounded-full animate-pulse" />
+                <span className="text-xs text-green-400 mono">OK</span>
+              </div>
+            </div>
+            <p className="text-xs text-gray-600 mono">Local Mode • v1.0.0</p>
+          </div>
         </div>
       </div>
 
       {/* Mobile Header */}
-      <div className="md:hidden fixed w-full bg-white border-b border-gray-200 z-20">
+      <div className="md:hidden fixed w-full border-b z-20" style={{
+        background: 'var(--cyber-surface)',
+        borderColor: 'var(--cyber-border)'
+      }}>
         <div className="flex items-center justify-between h-16 px-4">
-          <div className="flex items-center">
-            <ShieldAlert className="h-8 w-8 text-blue-600 mr-2" />
-            <span className="text-xl font-bold text-gray-800">CVE Tracker</span>
+          <div className="flex items-center space-x-2">
+            <ShieldAlert className="h-7 w-7 text-cyan-400" strokeWidth={1.5} />
+            <span className="mono text-lg font-bold text-gray-100">LOCAL<span className="text-cyan-400">CVE</span></span>
           </div>
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100"
+            className="p-2 rounded-md text-gray-400 hover:text-cyan-400 hover:bg-gray-800/50 transition-all"
           >
             {isMobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
           </button>
@@ -66,19 +124,19 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => 
 
       {/* Mobile Menu */}
       {isMobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 z-30 bg-white pt-16">
-           <nav className="px-4 py-6 space-y-1">
-            <NavItem id="dashboard" label="Dashboard" icon={LayoutDashboard} />
-            <NavItem id="cves" label="CVEs" icon={Database} />
-            <NavItem id="watchlists" label="Watchlists" icon={Activity} />
+        <div className="md:hidden fixed inset-0 z-30 pt-16" style={{ background: 'var(--cyber-surface)' }}>
+          <nav className="px-4 py-6 space-y-1">
+            <NavItem id="dashboard" label="Overview" icon={LayoutDashboard} />
+            <NavItem id="cves" label="Threats" icon={Database} />
             <NavItem id="alerts" label="Alerts" icon={Bell} />
-            <NavItem id="jobs" label="Jobs" icon={Activity} />
+            <NavItem id="watchlists" label="Watchlists" icon={Activity} />
+            <NavItem id="jobs" label="Ingestion" icon={Terminal} />
           </nav>
         </div>
       )}
 
       {/* Main Content */}
-      <main className="flex-1 md:ml-64 p-4 md:p-8 pt-20 md:pt-8 overflow-y-auto">
+      <main className="flex-1 md:ml-72 p-4 md:p-8 pt-20 md:pt-8 overflow-y-auto">
         <div className="max-w-7xl mx-auto">
           {children}
         </div>

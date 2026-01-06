@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__MCP_DOCKER__mcp-find",
+      "mcp__MCP_DOCKER__mcp-add",
+      "mcp__MCP_DOCKER__mcp-exec",
+      "Bash(docker mcp:*)",
+      "mcp__plugin_greptile_greptile__list_pull_requests",
+      "Bash(test:*)",
+      "Bash(cat:*)",
+      "Bash(gh pr:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)"
+    ]
+  },
+  "outputStyle": "Explanatory"
+}

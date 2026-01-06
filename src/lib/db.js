@@ -1,5 +1,5 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+import Database from 'better-sqlite3';
+import path from 'path';
 
 // Ensure data directory exists if you were putting it in a subdir, 
 // but here we use root for simplicity as per requirements.
@@ -10,6 +10,9 @@ const db = new Database(dbPath); // verbose: console.log for debugging if needed
 // Optimize for concurrency and safety
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('synchronous = NORMAL');
+db.pragma('temp_store = MEMORY');
+db.pragma('cache_size = -64000'); // 64MB cache
 
 // Schema initialization
 const initSql = `
@@ -30,7 +33,7 @@ CREATE TABLE IF NOT EXISTS metrics (
   vector_string TEXT,
   FOREIGN KEY(cve_id) REFERENCES cves(id) ON DELETE CASCADE
 );
-CREATE TABLE IF NOT EXISTS references (
+CREATE TABLE IF NOT EXISTS cve_references (
   cve_id TEXT,
   url TEXT,
   FOREIGN KEY(cve_id) REFERENCES cves(id) ON DELETE CASCADE
@@ -98,12 +101,12 @@ try {
   const tableInfo = db.pragma("table_info(cves_fts)");
   const hasRefs = tableInfo.some(c => c.name === 'refs');
   if (tableInfo.length > 0 && !hasRefs) {
-      db.exec('DROP TABLE cves_fts');
+    db.exec('DROP TABLE cves_fts');
   }
-} catch(e) {}
+} catch (e) { }
 
 db.exec(`
   CREATE VIRTUAL TABLE IF NOT EXISTS cves_fts USING fts5(id, description, refs);
 `);
 
-module.exports = db;
+export default db;
