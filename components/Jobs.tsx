@@ -7,11 +7,20 @@ interface JobsProps {
   onRunIngest: () => void;
 }
 
+interface StatusConfig {
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  bg: string;
+  text: string;
+  border: string;
+  label: string;
+  animate?: boolean;
+}
+
 const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest }) => {
   const isRunning = jobs.length > 0 && jobs[0].status === 'RUNNING';
 
   const getStatusBadge = (status: string) => {
-    const configs = {
+    const configs: Record<string, StatusConfig> = {
       'COMPLETED': {
         icon: CheckCircle,
         bg: 'bg-green-500/20',
@@ -36,7 +45,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest }) => {
       }
     };
 
-    const config = configs[status as keyof typeof configs] || {
+    const config = configs[status] || {
       icon: Clock,
       bg: 'bg-gray-500/20',
       text: 'text-gray-400',
