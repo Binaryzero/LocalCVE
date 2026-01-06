@@ -79,12 +79,77 @@ async function prepareRepo() {
         const newHash = gitExec('rev-parse HEAD');
 
         if (oldHash === newHash) {
-            const count = db.prepare('SELECT count(*) as c FROM cves').get().c;
-            if (count === 0) return { mode: 'full', oldHash, newHash };
+            // Even if git hasn't changed, check if database is properly populated
+            let count = 0;
+            try {
+                const result = db.prepare('SELECT count(*) as c FROM cves').get();
+                count = result ? result.c : 0;
+            } catch (e) {
+                console.warn('[Ingest] Database query failed, forcing full scan:', e.message);
+                return { mode: 'full', oldHash, newHash };
+            }
+
+            // If database is empty or suspiciously small, force full scan
+            if (count === 0) {
+                console.log('[Ingest] Database is empty, forcing full scan');
+                return { mode: 'full', oldHash, newHash };
+            }
+
+            // Check if we have the stored commit hash to compare against
+            let storedHash = null;
+            try {
+                const result = db.prepare("SELECT value FROM system_metadata WHERE key = 'cvelist_commit'").get();
+                storedHash = result ? result.value : null;
+            } catch (e) {
+                // Table might not exist yet
+            }
+
+            // If we don't have a stored hash, we can't be sure database is current
+            if (!storedHash) {
+                console.log('[Ingest] No stored commit hash found, forcing full scan to ensure database is current');
+                return { mode: 'full', oldHash, newHash };
+            }
+
+            // Only skip if we have a reasonable number of CVEs (>100,000 is full dataset)
+            // AND git truly hasn't changed AND we have a stored hash matching current
+            if (count < 100000) {
+                console.log(`[Ingest] Database has only ${count} CVEs (expected ~250k), forcing full scan`);
+                return { mode: 'full', oldHash, newHash };
+            }
+
+            console.log(`[Ingest] No git changes and database has ${count} CVEs, skipping`);
             return { mode: 'incremental', oldHash, newHash, noChanges: true };
         }
 
-        return { mode: 'incremental', oldHash, newHash };
+        // Git pulled new commits - check if we have a stored hash to know where we left off
+        let storedHash = null;
+        let dbCount = 0;
+        try {
+            const result = db.prepare("SELECT value FROM system_metadata WHERE key = 'cvelist_commit'").get();
+            storedHash = result ? result.value : null;
+
+            const countResult = db.prepare('SELECT count(*) as c FROM cves').get();
+            dbCount = countResult ? countResult.c : 0;
+        } catch (e) {
+            console.warn('[Ingest] Database check failed, forcing full scan:', e.message);
+            return { mode: 'full', oldHash, newHash };
+        }
+
+        // If no stored hash, we don't know where we left off - must do full scan
+        if (!storedHash) {
+            console.log('[Ingest] No stored commit hash found after git pull, forcing full scan to catch up');
+            return { mode: 'full', oldHash, newHash };
+        }
+
+        // If database is suspiciously small, do full scan to ensure completeness
+        if (dbCount < 100000) {
+            console.log(`[Ingest] Database has only ${dbCount} CVEs after git pull (expected ~250k), forcing full scan`);
+            return { mode: 'full', oldHash, newHash };
+        }
+
+        // We have a stored hash and good CVE count - use incremental diff from stored hash to new hash
+        console.log(`[Ingest] Incremental update from ${storedHash.substring(0, 8)} to ${newHash.substring(0, 8)}`);
+        return { mode: 'incremental', oldHash: storedHash, newHash };
     }
 }
 
@@ -101,7 +166,7 @@ function getChangedFiles(oldHash, newHash) {
 }
 
 // --- CVE JSON 5.0 Normalization ---
-function normalizeCve5(raw) {
+export function normalizeCve5(raw) {
     const meta = raw.cveMetadata || {};
     const cna = raw.containers?.cna || {};
 
@@ -113,24 +178,58 @@ function normalizeCve5(raw) {
     const descObj = cna.descriptions?.find(d => d.lang === 'en') || cna.descriptions?.[0];
     const description = descObj ? descObj.value : 'No description available';
 
-    let score = null, severity = null, vector = null, cvssVersion = null;
+    // Collect all CVSS metrics instead of just the "best" one
+    const allMetrics = [];
+    let primaryScore = null, primarySeverity = null, primaryVector = null, primaryVersion = null;
+    
     const metrics = cna.metrics || [];
     for (const m of metrics) {
         if (m.cvssV3_1) {
-            score = m.cvssV3_1.baseScore; severity = m.cvssV3_1.baseSeverity;
-            vector = m.cvssV3_1.vectorString; cvssVersion = '3.1'; break;
+            const metric = {
+                version: '3.1',
+                score: m.cvssV3_1.baseScore,
+                severity: m.cvssV3_1.baseSeverity,
+                vector: m.cvssV3_1.vectorString
+            };
+            allMetrics.push(metric);
+            // Set as primary if we haven't set one yet (priority: 3.1 > 3.0 > 2.0)
+            if (!primaryVersion) {
+                primaryScore = metric.score;
+                primarySeverity = metric.severity;
+                primaryVector = metric.vector;
+                primaryVersion = metric.version;
+            }
         }
         if (m.cvssV3_0) {
-            score = m.cvssV3_0.baseScore; severity = m.cvssV3_0.baseSeverity;
-            vector = m.cvssV3_0.vectorString; cvssVersion = '3.0'; break;
+            const metric = {
+                version: '3.0',
+                score: m.cvssV3_0.baseScore,
+                severity: m.cvssV3_0.baseSeverity,
+                vector: m.cvssV3_0.vectorString
+            };
+            allMetrics.push(metric);
+            // Set as primary if we haven't set one yet and this is better than v2.0
+            if (!primaryVersion || primaryVersion === '2.0') {
+                primaryScore = metric.score;
+                primarySeverity = metric.severity;
+                primaryVector = metric.vector;
+                primaryVersion = metric.version;
+            }
         }
-    }
-    if (!cvssVersion) {
-        for (const m of metrics) {
-            if (m.cvssV2_0) {
-                score = m.cvssV2_0.baseScore;
-                severity = m.cvssV2_0.baseSeverity || 'UNKNOWN';
-                vector = m.cvssV2_0.vectorString; cvssVersion = '2.0'; break;
+        if (m.cvssV2_0) {
+            const metric = {
+                version: '2.0',
+                score: m.cvssV2_0.baseScore,
+                severity: m.cvssV2_0.baseSeverity || 'UNKNOWN',
+                vector: m.cvssV2_0.vectorString
+            };
+            allMetrics.push(metric);
+            // Set as primary only if we haven't set one yet
+            if (!primaryVersion) {
+                primaryScore = metric.score;
+                primarySeverity = metric.severity;
+                primaryVector = metric.vector;
+                primaryVersion = metric.version;
             }
         }
     }
@@ -143,7 +242,52 @@ function normalizeCve5(raw) {
         }
     }
 
-    return { id, description, published, lastModified, vulnStatus, cvssVersion, score, severity, vector, kev: false, references: refs, configurations };
+    // Create version-specific fields for backward compatibility
+    let cvss2Score = null, cvss2Severity = null;
+    let cvss30Score = null, cvss30Severity = null;
+    let cvss31Score = null, cvss31Severity = null;
+    
+    for (const metric of allMetrics) {
+        switch (metric.version) {
+            case '2.0':
+                cvss2Score = metric.score;
+                cvss2Severity = metric.severity;
+                break;
+            case '3.0':
+                cvss30Score = metric.score;
+                cvss30Severity = metric.severity;
+                break;
+            case '3.1':
+                cvss31Score = metric.score;
+                cvss31Severity = metric.severity;
+                break;
+        }
+    }
+
+    return { 
+        id, 
+        description, 
+        published, 
+        lastModified, 
+        vulnStatus, 
+        // Primary score for backward compatibility
+        cvssVersion: primaryVersion,
+        score: primaryScore,
+        severity: primarySeverity,
+        vector: primaryVector,
+        // Version-specific scores
+        cvss2Score,
+        cvss2Severity,
+        cvss30Score,
+        cvss30Severity,
+        cvss31Score,
+        cvss31Severity,
+        // All metrics for database storage
+        allMetrics,
+        kev: false, 
+        references: refs, 
+        configurations 
+    };
 }
 
 // --- Database Operations ---
@@ -172,7 +316,9 @@ const statements = {
     insertAlert: db.prepare(`
       INSERT INTO alerts (cve_id, watchlist_id, watchlist_name, type, created_at)
       VALUES (?, ?, ?, ?, ?)
-    `)
+    `),
+    checkExistingAlert: db.prepare('SELECT id FROM alerts WHERE cve_id = ? AND watchlist_id = ? AND read = 0'),
+    updateWatchlistMatchCount: db.prepare('UPDATE watchlists SET match_count = match_count + 1 WHERE id = ?')
 };
 
 let activeWatchlists = [];
@@ -203,7 +349,15 @@ const processBatch = db.transaction((batch) => {
         });
 
         statements.deleteMetrics.run(item.id);
-        if (item.score !== null) statements.insertMetric.run(item.id, item.cvssVersion, item.score, item.severity, item.vector);
+        // Insert all CVSS metrics instead of just the primary one
+        if (item.allMetrics && item.allMetrics.length > 0) {
+            for (const metric of item.allMetrics) {
+                statements.insertMetric.run(item.id, metric.version, metric.score, metric.severity, metric.vector);
+            }
+        } else if (item.score !== null) {
+            // Fallback to original logic for backward compatibility
+            statements.insertMetric.run(item.id, item.cvssVersion, item.score, item.severity, item.vector);
+        }
 
         statements.deleteRefs.run(item.id);
         for (const url of item.references) statements.insertRef.run(item.id, url);
@@ -216,9 +370,21 @@ const processBatch = db.transaction((batch) => {
 
         // Alert Generation
         for (const wl of activeWatchlists) {
-            if (matchesQuery(item, wl.query)) {
-                const type = existing ? 'UPDATED_MATCH' : 'NEW_MATCH';
-                statements.insertAlert.run(item.id, wl.id, wl.name, type, getTimestamp());
+            try {
+                if (matchesQuery(item, wl.query)) {
+                    // Check for existing unread alert to prevent duplicates
+                    const existingAlert = statements.checkExistingAlert.get(item.id, wl.id);
+                    if (!existingAlert) {
+                        const type = existing ? 'UPDATED_MATCH' : 'NEW_MATCH';
+                        statements.insertAlert.run(item.id, wl.id, wl.name, type, getTimestamp());
+                        // Update watchlist match count
+                        statements.updateWatchlistMatchCount.run(wl.id);
+                        console.log(`[Alert] Generated ${type} alert for ${item.id} matching watchlist "${wl.name}"`);
+                    }
+                }
+            } catch (alertError) {
+                console.error(`[Alert] Failed to generate alert for ${item.id} on watchlist "${wl.name}":`, alertError.message);
+                // Continue processing other watchlists even if one fails
             }
         }
 

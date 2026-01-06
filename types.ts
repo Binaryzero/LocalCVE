@@ -1,8 +1,17 @@
 export interface Cve {
   id: string;
   description: string;
-  cvssV3Score: number | null;
-  cvssV3Severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | null;
+  // Primary score for backward compatibility
+  cvssScore: number | null;
+  cvssSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | null;
+  cvssVersion: '2.0' | '3.0' | '3.1' | null;
+  // Version-specific scores
+  cvss2Score?: number | null;
+  cvss2Severity?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | null;
+  cvss30Score?: number | null;
+  cvss30Severity?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | null;
+  cvss31Score?: number | null;
+  cvss31Severity?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | null;
   published: string;
   lastModified: string;
   epssScore: number | null;
@@ -46,6 +55,12 @@ export interface QueryModel {
   modified_to?: string;
   cvss_min?: number;
   cvss_max?: number;
+  cvss2_min?: number;
+  cvss2_max?: number;
+  cvss30_min?: number;
+  cvss30_max?: number;
+  cvss31_min?: number;
+  cvss31_max?: number;
   kev?: boolean;
   epss_min?: number;
 }

@@ -10,9 +10,9 @@ export function matchesQuery(cve, query) {
     // Text search (case insensitive)
     if (query.text) {
         const searchText = query.text.toLowerCase();
-        const inId = cve.id.toLowerCase().includes(searchText);
-        const inDesc = cve.description.toLowerCase().includes(searchText);
-        const inRefs = (cve.references || []).some(r => r.toLowerCase().includes(searchText));
+        const inId = cve.id ? cve.id.toLowerCase().includes(searchText) : false;
+        const inDesc = cve.description ? cve.description.toLowerCase().includes(searchText) : false;
+        const inRefs = (cve.references || []).some(r => r ? r.toLowerCase().includes(searchText) : false);
 
         if (!inId && !inDesc && !inRefs) return false;
     }
@@ -25,10 +25,41 @@ export function matchesQuery(cve, query) {
     if (query.modified_from && cve.lastModified < query.modified_from) return false;
     if (query.modified_to && cve.lastModified > query.modified_to) return false;
 
-    // CVSS Score
-    const score = cve.score || 0;
-    if (query.cvss_min !== undefined && score < query.cvss_min) return false;
-    if (query.cvss_max !== undefined && score > query.cvss_max) return false;
+    // CVSS Score - primary score (backward compatibility)
+    const primaryScore = cve.score || 0;
+    if (query.cvss_min !== undefined && primaryScore < query.cvss_min) return false;
+    if (query.cvss_max !== undefined && primaryScore > query.cvss_max) return false;
+
+    // Version-specific CVSS filtering
+    // CVSS v2 filtering
+    if (query.cvss2_min !== undefined) {
+        const cvss2Score = cve.cvss2Score || 0;
+        if (cvss2Score < query.cvss2_min) return false;
+    }
+    if (query.cvss2_max !== undefined) {
+        const cvss2Score = cve.cvss2Score || 0;
+        if (cvss2Score > query.cvss2_max) return false;
+    }
+
+    // CVSS v3.0 filtering
+    if (query.cvss30_min !== undefined) {
+        const cvss30Score = cve.cvss30Score || 0;
+        if (cvss30Score < query.cvss30_min) return false;
+    }
+    if (query.cvss30_max !== undefined) {
+        const cvss30Score = cve.cvss30Score || 0;
+        if (cvss30Score > query.cvss30_max) return false;
+    }
+
+    // CVSS v3.1 filtering
+    if (query.cvss31_min !== undefined) {
+        const cvss31Score = cve.cvss31Score || 0;
+        if (cvss31Score < query.cvss31_min) return false;
+    }
+    if (query.cvss31_max !== undefined) {
+        const cvss31Score = cve.cvss31Score || 0;
+        if (cvss31Score > query.cvss31_max) return false;
+    }
 
     // KEV
     if (query.kev === true && cve.kev !== true) return false;
