@@ -76,6 +76,16 @@ class MockRequest extends EventEmitter {
 }
 
 describe('Server Helper Functions', () => {
+    // Global cleanup for all test watchlists and alerts created by server tests
+    afterAll(() => {
+        try {
+            db.prepare("DELETE FROM alerts WHERE watchlist_name IN ('Test Watchlist', 'Updated Name')").run();
+            db.prepare("DELETE FROM watchlists WHERE name IN ('Test Watchlist', 'Updated Name')").run();
+        } catch (e) {
+            // Ignore cleanup errors
+        }
+    });
+
     describe('sendJson', () => {
         test('should send JSON response with 200 status', () => {
             const res = new MockResponse();
@@ -478,6 +488,12 @@ describe('API Endpoints', () => {
     });
 
     describe('POST /api/watchlists', () => {
+        afterEach(() => {
+            try {
+                db.prepare("DELETE FROM watchlists WHERE name = 'Test Watchlist'").run();
+            } catch (e) { /* ignore */ }
+        });
+
         test('should create watchlist with valid body', async () => {
             const req = new MockRequest('POST', '/api/watchlists');
             const res = new MockResponse();
@@ -509,6 +525,12 @@ describe('API Endpoints', () => {
     });
 
     describe('PUT /api/watchlists/:id', () => {
+        afterEach(() => {
+            try {
+                db.prepare("DELETE FROM watchlists WHERE name IN ('Original Name', 'Updated Name')").run();
+            } catch (e) { /* ignore */ }
+        });
+
         test('should update watchlist with valid body', async () => {
             // First create a watchlist
             const createReq = new MockRequest('POST', '/api/watchlists');
