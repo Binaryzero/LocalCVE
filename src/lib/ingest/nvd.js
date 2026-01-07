@@ -479,3 +479,18 @@ export function run() {
     runIngest(jobId).catch(err => console.error('Ingest error:', err));
     return jobId;
 }
+
+// Export helper functions for testing
+export {
+    computeHash,
+    getDiff,
+    ensureDir,
+    getTimestamp,
+    walk,
+    gitExec,
+    getChangedFiles,
+    prepareRepo,
+    processBatch,
+    refreshWatchlists,
+    statements
+};

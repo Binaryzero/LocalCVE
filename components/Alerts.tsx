@@ -1,16 +1,19 @@
-import React from 'react';
-import { Bell, Check, Trash2, Calendar, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { Bell, Check, Trash2, Calendar, AlertCircle, CheckCheck, Trash } from 'lucide-react';
 import { Alert } from '../types';
 
 interface AlertsProps {
   alerts: Alert[];
   onMarkRead: (id: string) => void;
   onDelete: (id: string) => void;
+  onMarkAllRead?: () => void;
+  onDeleteAll?: () => void;
   onViewCve?: (id: string) => void;
 }
 
-const Alerts: React.FC<AlertsProps> = ({ alerts, onMarkRead, onDelete, onViewCve }) => {
+const Alerts: React.FC<AlertsProps> = ({ alerts, onMarkRead, onDelete, onMarkAllRead, onDeleteAll, onViewCve }) => {
   const unreadCount = alerts.filter(a => !a.read).length;
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -29,17 +32,59 @@ const Alerts: React.FC<AlertsProps> = ({ alerts, onMarkRead, onDelete, onViewCve
           </div>
         </div>
 
-        {unreadCount > 0 && (
-          <div className="flex items-center space-x-2 px-4 py-2 rounded-lg border animate-pulse"
-            style={{
-              background: 'rgba(239, 68, 68, 0.1)',
-              borderColor: '#ef4444'
-            }}
-          >
-            <div className="w-2 h-2 bg-red-400 rounded-full" />
-            <span className="text-sm text-red-400 mono font-medium">{unreadCount} NEW ALERTS</span>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {unreadCount > 0 && (
+            <div className="flex items-center space-x-2 px-4 py-2 rounded-lg border animate-pulse"
+              style={{
+                background: 'rgba(239, 68, 68, 0.1)',
+                borderColor: '#ef4444'
+              }}
+            >
+              <div className="w-2 h-2 bg-red-400 rounded-full" />
+              <span className="text-sm text-red-400 mono font-medium">{unreadCount} NEW</span>
+            </div>
+          )}
+          {unreadCount > 0 && onMarkAllRead && (
+            <button
+              onClick={onMarkAllRead}
+              className="inline-flex items-center px-3 py-2 rounded-lg border transition-all hover:border-cyan-500 hover:bg-cyan-500/10"
+              style={{ borderColor: 'var(--cyber-border)' }}
+              title="Mark all as read"
+            >
+              <CheckCheck className="h-4 w-4 text-cyan-400 mr-2" strokeWidth={1.5} />
+              <span className="text-sm text-cyan-400 mono font-medium">MARK ALL READ</span>
+            </button>
+          )}
+          {alerts.length > 0 && onDeleteAll && (
+            showDeleteConfirm ? (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500 bg-red-500/10">
+                <span className="text-sm text-red-400 mono">Delete all?</span>
+                <button
+                  onClick={() => { onDeleteAll(); setShowDeleteConfirm(false); }}
+                  className="px-2 py-1 rounded bg-red-500 text-white text-xs mono font-medium hover:bg-red-600 transition-colors"
+                >
+                  YES
+                </button>
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="px-2 py-1 rounded bg-gray-700 text-gray-300 text-xs mono font-medium hover:bg-gray-600 transition-colors"
+                >
+                  NO
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="inline-flex items-center px-3 py-2 rounded-lg border transition-all hover:border-red-500 hover:bg-red-500/10"
+                style={{ borderColor: 'var(--cyber-border)' }}
+                title="Delete all alerts"
+              >
+                <Trash className="h-4 w-4 text-gray-400 mr-2" strokeWidth={1.5} />
+                <span className="text-sm text-gray-400 mono font-medium">DELETE ALL</span>
+              </button>
+            )
+          )}
+        </div>
       </div>
 
       {/* Alerts List */}

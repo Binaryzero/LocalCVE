@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LocalCVE • Security Intelligence</title>
+    <title>CVE Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,17 +21,25 @@
 </script>
 <style>
   :root {
-    --cyber-bg: #0a0e1a;
-    --cyber-surface: #111827;
-    --cyber-border: #1f2937;
-    --cyber-accent: #06b6d4;
-    --cyber-accent-bright: #22d3ee;
+    /* Pure black background with neutral grays */
+    --cyber-bg: #000000;
+    --cyber-surface: #0a0a0a;
+    --cyber-surface-elevated: #111111;
+    --cyber-border: #1c1c1c;
+    --cyber-border-bright: #2a2a2a;
+    /* Accent colors - softer cyan for less visual noise */
+    --cyber-accent: #0891b2;
+    --cyber-accent-bright: #06b6d4;
+    /* Semantic colors */
     --cyber-danger: #ef4444;
     --cyber-warning: #f59e0b;
     --cyber-success: #10b981;
-    --cyber-text: #f3f4f6;
-    --cyber-text-dim: #9ca3af;
-    --grid-color: rgba(6, 182, 212, 0.03);
+    /* Text with WCAG AA compliant contrast */
+    --cyber-text: #f5f5f5;
+    --cyber-text-dim: #a3a3a3;
+    --cyber-text-muted: #737373;
+    /* Subtle grid - near invisible */
+    --grid-color: rgba(255, 255, 255, 0.02);
   }
 
   * {
@@ -46,7 +54,7 @@
     overflow-x: hidden;
   }
 
-  /* Cyberpunk grid background */
+  /* Subtle grid background - very minimal */
   body::before {
     content: '';
     position: fixed;
@@ -57,36 +65,10 @@
     background-image:
       linear-gradient(var(--grid-color) 1px, transparent 1px),
       linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
-    background-size: 50px 50px;
+    background-size: 60px 60px;
     pointer-events: none;
     z-index: 0;
-    opacity: 0.4;
-  }
-
-  /* Subtle scan line effect */
-  body::after {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 3px;
-    background: linear-gradient(90deg,
-      transparent,
-      var(--cyber-accent-bright),
-      transparent
-    );
-    animation: scan 8s linear infinite;
-    pointer-events: none;
-    z-index: 100;
     opacity: 0.3;
-  }
-
-  @keyframes scan {
-    0% { transform: translateY(0); opacity: 0; }
-    10% { opacity: 0.3; }
-    90% { opacity: 0.3; }
-    100% { transform: translateY(100vh); opacity: 0; }
   }
 
   #root {
@@ -98,13 +80,37 @@
     font-family: 'JetBrains Mono', 'Courier New', monospace;
   }
 
-  /* Custom glow effects */
+  /* Custom glow effects - subtle */
   .glow-accent {
-    box-shadow: 0 0 20px rgba(6, 182, 212, 0.3);
+    box-shadow: 0 0 15px rgba(8, 145, 178, 0.25);
   }
 
   .glow-danger {
-    box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
+  }
+
+  /* Accessibility: Focus states */
+  *:focus-visible {
+    outline: 2px solid var(--cyber-accent);
+    outline-offset: 2px;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible {
+    outline: 2px solid var(--cyber-accent-bright);
+    outline-offset: 2px;
+  }
+
+  /* Reduce motion for users who prefer it */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 
   /* Animated gradient borders */
@@ -147,23 +153,23 @@
     opacity: 0.5;
   }
 
-  /* Custom scrollbar */
+  /* Custom scrollbar - minimal */
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
 
   ::-webkit-scrollbar-track {
-    background: var(--cyber-surface);
+    background: transparent;
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--cyber-border);
-    border-radius: 4px;
+    background: var(--cyber-border-bright);
+    border-radius: 3px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--cyber-accent);
+    background: var(--cyber-text-muted);
   }
 
   /* Smooth transitions */

@@ -25,9 +25,47 @@ const sendError = (res, message, status = 500) => {
   res.end(JSON.stringify({ error: message }));
 };
 
+// Validation constants
+const MAX_BODY_SIZE = 1024 * 1024; // 1MB limit
+const MAX_SEARCH_LENGTH = 500;
+const MAX_LIMIT = 1000;
+const MIN_LIMIT = 1;
+const DEFAULT_LIMIT = 100;
+const VALID_SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+const MAX_WATCHLIST_NAME_LENGTH = 255;
+
+// Validation helper for watchlist body
+const validateWatchlistBody = (body) => {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { error: 'Request body must be a JSON object' };
+  }
+  if (!body.name || typeof body.name !== 'string') {
+    return { error: 'name is required and must be a string' };
+  }
+  if (body.name.trim().length === 0) {
+    return { error: 'name cannot be empty' };
+  }
+  if (body.name.length > MAX_WATCHLIST_NAME_LENGTH) {
+    return { error: `name must be ${MAX_WATCHLIST_NAME_LENGTH} characters or less` };
+  }
+  if (!body.query || typeof body.query !== 'object' || Array.isArray(body.query)) {
+    return { error: 'query is required and must be an object' };
+  }
+  return null; // Valid
+};
+
 const readBody = (req) => new Promise((resolve, reject) => {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let size = 0;
+  req.on('data', chunk => {
+    size += chunk.length;
+    if (size > MAX_BODY_SIZE) {
+      req.destroy();
+      reject(new Error('Request body too large'));
+      return;
+    }
+    body += chunk;
+  });
   req.on('end', () => {
     try {
       resolve(body ? JSON.parse(body) : {});
@@ -69,14 +107,53 @@ async function handleRequest(req, res) {
 
     // --- CVEs ---
     if (req.method === 'GET' && pathname === '/api/cves') {
+      // Validate search parameter
       const search = url.searchParams.get('search') || '';
-      const limit = parseInt(url.searchParams.get('limit')) || 100;
-      const offset = parseInt(url.searchParams.get('offset')) || 0;
-      const severity = url.searchParams.get('severity');
-      const cvssMin = parseFloat(url.searchParams.get('cvss_min'));
-      const cvss2Min = parseFloat(url.searchParams.get('cvss2_min'));
-      const cvss30Min = parseFloat(url.searchParams.get('cvss30_min'));
-      const cvss31Min = parseFloat(url.searchParams.get('cvss31_min'));
+      if (search.length > MAX_SEARCH_LENGTH) {
+        return sendError(res, `Search query too long (max ${MAX_SEARCH_LENGTH} characters)`, 400);
+      }
+
+      // Validate and bound limit parameter
+      const rawLimit = parseInt(url.searchParams.get('limit'));
+      const limit = isNaN(rawLimit) ? DEFAULT_LIMIT : Math.min(Math.max(rawLimit, MIN_LIMIT), MAX_LIMIT);
+
+      // Validate offset is non-negative
+      const rawOffset = parseInt(url.searchParams.get('offset'));
+      const offset = isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
+
+      // Validate severity against enum
+      const rawSeverity = url.searchParams.get('severity');
+      const severity = rawSeverity ? rawSeverity.toUpperCase() : null;
+      if (severity && !VALID_SEVERITIES.includes(severity)) {
+        return sendError(res, `Invalid severity. Must be one of: ${VALID_SEVERITIES.join(', ')}`, 400);
+      }
+
+      // Validate CVSS scores are in valid range (0-10)
+      const validateCvss = (val, name) => {
+        if (val === null || isNaN(val)) return null;
+        if (val < 0 || val > 10) {
+          return { error: `${name} must be between 0 and 10` };
+        }
+        return val;
+      };
+
+      const cvssMinRaw = parseFloat(url.searchParams.get('cvss_min'));
+      const cvss2MinRaw = parseFloat(url.searchParams.get('cvss2_min'));
+      const cvss30MinRaw = parseFloat(url.searchParams.get('cvss30_min'));
+      const cvss31MinRaw = parseFloat(url.searchParams.get('cvss31_min'));
+
+      const cvssMin = validateCvss(cvssMinRaw, 'cvss_min');
+      const cvss2Min = validateCvss(cvss2MinRaw, 'cvss2_min');
+      const cvss30Min = validateCvss(cvss30MinRaw, 'cvss30_min');
+      const cvss31Min = validateCvss(cvss31MinRaw, 'cvss31_min');
+
+      // Check for validation errors
+      for (const val of [cvssMin, cvss2Min, cvss30Min, cvss31Min]) {
+        if (val && val.error) {
+          return sendError(res, val.error, 400);
+        }
+      }
+
       const kev = url.searchParams.get('kev');
 
       // Build base query to get CVEs with their JSON data
@@ -99,13 +176,13 @@ async function handleRequest(req, res) {
       const metricConditions = [];
       if (severity) {
         metricConditions.push('severity = ?');
-        params.push(severity.toUpperCase());
+        params.push(severity); // Already uppercased during validation
       }
       if (cvssMin) {
         metricConditions.push('score >= ?');
         params.push(cvssMin);
       }
-      
+
       // Add version-specific filtering
       if (cvss2Min) {
         metricConditions.push('(cvss_version = ? AND score >= ?)');
@@ -144,14 +221,14 @@ async function handleRequest(req, res) {
         const data = JSON.parse(r.json);
         return data.id;
       });
-      
+
       const metricsMap = new Map();
       if (cveIds.length > 0) {
         // Create placeholders for the IN clause
         const placeholders = cveIds.map(() => '?').join(',');
         const metricsQuery = `SELECT cve_id, cvss_version, score, severity, vector_string FROM metrics WHERE cve_id IN (${placeholders})`;
         const metricsRows = db.prepare(metricsQuery).all(...cveIds);
-        
+
         // Group metrics by CVE ID
         for (const metric of metricsRows) {
           if (!metricsMap.has(metric.cve_id)) {
@@ -164,12 +241,12 @@ async function handleRequest(req, res) {
       const cves = rows.map(r => {
         const data = JSON.parse(r.json);
         const cveMetrics = metricsMap.get(data.id) || [];
-        
+
         // Extract version-specific metrics
         let cvss2Score = null, cvss2Severity = null;
         let cvss30Score = null, cvss30Severity = null;
         let cvss31Score = null, cvss31Severity = null;
-        
+
         for (const metric of cveMetrics) {
           switch (metric.cvss_version) {
             case '2.0':
@@ -186,7 +263,7 @@ async function handleRequest(req, res) {
               break;
           }
         }
-        
+
         return {
           id: data.id,
           description: data.description,
@@ -218,18 +295,18 @@ async function handleRequest(req, res) {
       const id = cveMatch[1];
       const row = db.prepare('SELECT json FROM cves WHERE id = ?').get(id);
       if (!row) return sendJson(res, { error: 'Not found' }, 404);
-      
+
       // Get all metrics for this CVE
       const metricsRows = db.prepare('SELECT cvss_version, score, severity, vector_string FROM metrics WHERE cve_id = ?').all(id);
-      
+
       // Parse the base CVE data
       const cveData = JSON.parse(row.json);
-      
+
       // Add version-specific metrics to the response
       let cvss2Score = null, cvss2Severity = null;
       let cvss30Score = null, cvss30Severity = null;
       let cvss31Score = null, cvss31Severity = null;
-      
+
       for (const metric of metricsRows) {
         switch (metric.cvss_version) {
           case '2.0':
@@ -246,7 +323,7 @@ async function handleRequest(req, res) {
             break;
         }
       }
-      
+
       // Add the version-specific fields to the response
       const enhancedCveData = {
         ...cveData,
@@ -260,7 +337,7 @@ async function handleRequest(req, res) {
         // Metrics details
         metrics: metricsRows
       };
-      
+
       return sendJson(res, enhancedCveData);
     }
 
@@ -295,8 +372,12 @@ async function handleRequest(req, res) {
 
       if (req.method === 'POST') {
         const body = await readBody(req);
+        const validationError = validateWatchlistBody(body);
+        if (validationError) {
+          return sendError(res, validationError.error, 400);
+        }
         const info = db.prepare('INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)')
-          .run(body.name, JSON.stringify(body.query), body.enabled ? 1 : 0);
+          .run(body.name.trim(), JSON.stringify(body.query), body.enabled ? 1 : 0);
         return sendJson(res, { id: info.lastInsertRowid.toString() }, 201);
       }
     }
@@ -306,8 +387,12 @@ async function handleRequest(req, res) {
       const id = wlMatch[1];
       if (req.method === 'PUT') {
         const body = await readBody(req);
+        const validationError = validateWatchlistBody(body);
+        if (validationError) {
+          return sendError(res, validationError.error, 400);
+        }
         db.prepare('UPDATE watchlists SET name = ?, query_json = ?, enabled = ? WHERE id = ?')
-          .run(body.name, JSON.stringify(body.query), body.enabled ? 1 : 0, id);
+          .run(body.name.trim(), JSON.stringify(body.query), body.enabled ? 1 : 0, id);
         return sendJson(res, { success: true });
       }
       if (req.method === 'DELETE') {
@@ -443,9 +528,30 @@ async function handleRequest(req, res) {
   }
 }
 
-const server = http.createServer(handleRequest);
+// Export for testing
+export {
+  handleRequest,
+  sendJson,
+  sendError,
+  readBody,
+  validateWatchlistBody,
+  MAX_BODY_SIZE,
+  MAX_SEARCH_LENGTH,
+  MAX_LIMIT,
+  MIN_LIMIT,
+  DEFAULT_LIMIT,
+  VALID_SEVERITIES,
+  MAX_WATCHLIST_NAME_LENGTH
+};
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Server running at http://127.0.0.1:${PORT}/`);
-  console.log('Ingestion endpoint available at POST /api/ingest');
-});
+// Only start server when run directly (not imported for testing)
+// Also allow if running under PM2 (ProcessContainerFork)
+const isMainModule = import.meta.url === `file://${process.argv[1]}` || process.argv[1].includes('pm2');
+
+if (isMainModule) {
+  const server = http.createServer(handleRequest);
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log(`Server running at http://127.0.0.1:${PORT}/`);
+    console.log('Ingestion endpoint available at POST /api/ingest');
+  });
+}

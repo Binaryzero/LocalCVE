@@ -55,34 +55,40 @@ const CveList: React.FC<CveListProps> = ({
     );
   };
 
+  const hasActiveSearch = filters.text?.trim() || filters.cvss_min > 0 || filters.kev;
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-100 mono tracking-tight">THREAT DATABASE</h1>
-          <div className="flex items-center space-x-3 mt-2">
-            <p className="text-sm text-gray-500 mono">
-              {totalCount.toLocaleString()} <span className="text-gray-600">RECORDS</span>
-            </p>
-            <div className="w-1 h-1 bg-gray-600 rounded-full" />
-            <p className="text-sm text-gray-500 mono">
-              PAGE {page + 1}/{totalPages}
-            </p>
-          </div>
+          <h1 className="text-3xl font-bold text-gray-100 mono tracking-tight">CVE SEARCH</h1>
+          {hasActiveSearch && (
+            <div className="flex items-center space-x-3 mt-2">
+              <p className="text-sm text-gray-500 mono">
+                {totalCount.toLocaleString()} <span className="text-gray-600">RESULTS</span>
+              </p>
+              <div className="w-1 h-1 bg-gray-600 rounded-full" />
+              <p className="text-sm text-gray-500 mono">
+                PAGE {page + 1}/{totalPages}
+              </p>
+            </div>
+          )}
         </div>
-        <button
-          onClick={() => onSaveWatchlist(filters)}
-          className="inline-flex items-center px-4 py-2.5 rounded-lg border transition-all hover:border-cyan-500"
-          style={{
-            background: 'rgba(6, 182, 212, 0.1)',
-            borderColor: 'var(--cyber-accent)',
-            color: 'var(--cyber-accent)'
-          }}
-        >
-          <Save className="h-4 w-4 mr-2" strokeWidth={1.5} />
-          <span className="mono text-sm font-medium">CREATE WATCHLIST</span>
-        </button>
+        {hasActiveSearch && (
+          <button
+            onClick={() => onSaveWatchlist(filters)}
+            className="inline-flex items-center px-4 py-2.5 rounded-lg border transition-all hover:border-cyan-500"
+            style={{
+              background: 'rgba(6, 182, 212, 0.1)',
+              borderColor: 'var(--cyber-accent)',
+              color: 'var(--cyber-accent)'
+            }}
+          >
+            <Save className="h-4 w-4 mr-2" strokeWidth={1.5} />
+            <span className="mono text-sm font-medium">CREATE WATCHLIST</span>
+          </button>
+        )}
       </div>
 
       {/* Search and Filters */}
@@ -122,18 +128,30 @@ const CveList: React.FC<CveListProps> = ({
             background: 'rgba(6, 182, 212, 0.03)',
             borderColor: 'var(--cyber-border)'
           }}>
-            <div>
+            <div className="md:col-span-2">
               <label className="block text-xs font-semibold text-gray-400 mb-2 mono">MIN CVSS SCORE</label>
-              <input
-                type="number"
-                min="0"
-                max="10"
-                step="0.1"
-                className="w-full p-2.5 border rounded-lg bg-gray-900/50 text-gray-100 mono text-sm focus:outline-none focus:border-cyan-500"
-                style={{ borderColor: 'var(--cyber-border)' }}
-                value={filters.cvss_min}
-                onChange={(e) => handleInputChange('cvss_min', parseFloat(e.target.value) || 0)}
-              />
+              <div className="flex items-center gap-4">
+                <input
+                  type="range"
+                  min="0"
+                  max="10"
+                  step="1"
+                  className="flex-1 h-2 rounded-lg appearance-none cursor-pointer"
+                  style={{ background: 'var(--cyber-border)' }}
+                  value={Math.floor(filters.cvss_min || 0)}
+                  onChange={(e) => handleInputChange('cvss_min', parseFloat(e.target.value))}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  className="w-20 p-2.5 border rounded-lg bg-gray-900/50 text-gray-100 mono text-sm text-center focus:outline-none focus:border-cyan-500"
+                  style={{ borderColor: 'var(--cyber-border)' }}
+                  value={filters.cvss_min || 0}
+                  onChange={(e) => handleInputChange('cvss_min', Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)))}
+                />
+              </div>
             </div>
             <div className="flex items-end">
               <label className="flex items-center space-x-2 cursor-pointer">
@@ -177,7 +195,21 @@ const CveList: React.FC<CveListProps> = ({
               </tr>
             </thead>
             <tbody>
-              {cves.length > 0 ? (
+              {!hasActiveSearch ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-20 text-center">
+                    <div className="flex flex-col items-center space-y-4">
+                      <div className="w-16 h-16 rounded-lg border border-cyan-500/30 flex items-center justify-center bg-cyan-500/5">
+                        <Search className="h-8 w-8 text-cyan-400" strokeWidth={1.5} />
+                      </div>
+                      <div>
+                        <p className="text-gray-300 mono text-sm font-medium mb-1">SEARCH THE CVE DATABASE</p>
+                        <p className="text-gray-500 mono text-xs">Enter a CVE ID, keyword, or use filters to find vulnerabilities</p>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : cves.length > 0 ? (
                 cves.map((cve, index) => (
                   <tr
                     key={cve.id}
@@ -234,7 +266,7 @@ const CveList: React.FC<CveListProps> = ({
                       <div className="w-12 h-12 rounded-lg border border-gray-700 flex items-center justify-center">
                         <Search className="h-6 w-6 text-gray-600" strokeWidth={1.5} />
                       </div>
-                      <p className="text-gray-500 mono text-sm">NO THREATS MATCH YOUR FILTERS</p>
+                      <p className="text-gray-500 mono text-sm">NO RESULTS MATCH YOUR SEARCH</p>
                     </div>
                   </td>
                 </tr>

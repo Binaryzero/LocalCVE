@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Layout from './components/Layout';
-import Dashboard from './components/Dashboard';
 import CveList from './components/CveList';
 import Watchlists from './components/Watchlists';
 import Jobs from './components/Jobs';
@@ -9,7 +8,7 @@ import CveDetail from './components/CveDetail';
 import { Cve, JobRun, Watchlist, Alert, QueryModel } from './types';
 
 const App: React.FC = () => {
-  const [activePage, setActivePage] = useState('dashboard');
+  const [activePage, setActivePage] = useState('cves');
   const [cves, setCves] = useState<Cve[]>([]);
   const [totalCves, setTotalCves] = useState(0);
   const [jobs, setJobs] = useState<JobRun[]>([]);
@@ -166,6 +165,24 @@ const App: React.FC = () => {
     }
   };
 
+  const handleMarkAllAlertsRead = async () => {
+    try {
+      await fetch('/api/alerts/mark-all-read', { method: 'PUT' });
+      setAlerts(prev => prev.map(a => ({ ...a, read: true })));
+    } catch (err) {
+      console.error("Failed to mark all alerts read", err);
+    }
+  };
+
+  const handleDeleteAllAlerts = async () => {
+    try {
+      await fetch('/api/alerts/delete-all', { method: 'DELETE' });
+      setAlerts([]);
+    } catch (err) {
+      console.error("Failed to delete all alerts", err);
+    }
+  };
+
   // --- Ingestion Logic ---
   const handleRunIngest = async () => {
     try {
@@ -200,8 +217,6 @@ const App: React.FC = () => {
     }
 
     switch (activePage) {
-      case 'dashboard':
-        return <Dashboard cves={cves} alerts={alerts} onNavigate={setActivePage} onViewCve={viewCve} />;
       case 'cves':
         if (selectedCveId) return <CveDetail id={selectedCveId} onBack={() => setSelectedCveId(null)} />;
         return (
@@ -222,9 +237,22 @@ const App: React.FC = () => {
       case 'jobs':
         return <Jobs jobs={jobs} onRunIngest={handleRunIngest} />;
       case 'alerts':
-        return <Alerts alerts={alerts} onMarkRead={handleMarkAlertRead} onDelete={handleDeleteAlert} onViewCve={viewCve} />;
+        return <Alerts alerts={alerts} onMarkRead={handleMarkAlertRead} onDelete={handleDeleteAlert} onMarkAllRead={handleMarkAllAlertsRead} onDeleteAll={handleDeleteAllAlerts} onViewCve={viewCve} />;
       default:
-        return <Dashboard cves={cves} alerts={alerts} onNavigate={setActivePage} onViewCve={viewCve} />;
+        if (selectedCveId) return <CveDetail id={selectedCveId} onBack={() => setSelectedCveId(null)} />;
+        return (
+          <CveList
+            cves={cves}
+            onSaveWatchlist={handleSaveWatchlist}
+            filters={filters}
+            onFilterChange={setFilters}
+            page={page}
+            onPageChange={setPage}
+            totalCount={totalCves}
+            pageSize={pageSize}
+            onSelectCve={setSelectedCveId}
+          />
+        );
     }
   };
 

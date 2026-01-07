@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:backend": "node src/server.js",
+    "start": "NODE_ENV=production node src/server.js",
     "build": "vite build",
     "preview": "vite preview",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",

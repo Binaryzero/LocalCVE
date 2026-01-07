@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, ShieldAlert, Bell, Activity, Database, Menu, X, Terminal } from 'lucide-react';
+import { ShieldAlert, Bell, Activity, Database, Menu, X, Terminal } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -59,11 +59,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => 
               <div className="absolute inset-0 bg-cyan-400/20 blur-xl rounded-full" />
             </div>
             <div>
-              <span className="mono text-xl font-bold text-gray-100 tracking-tight">LOCAL<span className="text-cyan-400">CVE</span></span>
-              <div className="flex items-center space-x-1 mt-0.5">
-                <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-                <span className="text-xs text-gray-500 mono">ONLINE</span>
-              </div>
+              <span className="mono text-xl font-bold text-gray-100 tracking-tight">CVE <span className="text-cyan-400">Tracker</span></span>
             </div>
           </div>
         </div>
@@ -72,35 +68,21 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => 
         <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
           <div className="mb-4">
             <div className="px-4 mb-2 text-xs font-semibold text-gray-600 uppercase tracking-wider mono">
-              Surveillance
+              Search
             </div>
-            <NavItem id="dashboard" label="Overview" icon={LayoutDashboard} />
-            <NavItem id="cves" label="Threats" icon={Database} />
+            <NavItem id="cves" label="CVEs" icon={Database} />
             <NavItem id="alerts" label="Alerts" icon={Bell} />
           </div>
 
           <div className="mb-4">
             <div className="px-4 mb-2 text-xs font-semibold text-gray-600 uppercase tracking-wider mono">
-              Operations
+              Manage
             </div>
             <NavItem id="watchlists" label="Watchlists" icon={Activity} />
             <NavItem id="jobs" label="Ingestion" icon={Terminal} />
           </div>
         </nav>
 
-        {/* Footer Status */}
-        <div className="p-4 border-t" style={{ borderColor: 'var(--cyber-border)' }}>
-          <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-800">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-400 mono">SYSTEM STATUS</p>
-              <div className="flex items-center space-x-1">
-                <div className="w-1 h-1 bg-green-400 rounded-full animate-pulse" />
-                <span className="text-xs text-green-400 mono">OK</span>
-              </div>
-            </div>
-            <p className="text-xs text-gray-600 mono">Local Mode • v1.0.0</p>
-          </div>
-        </div>
       </div>
 
       {/* Mobile Header */}
@@ -111,7 +93,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => 
         <div className="flex items-center justify-between h-16 px-4">
           <div className="flex items-center space-x-2">
             <ShieldAlert className="h-7 w-7 text-cyan-400" strokeWidth={1.5} />
-            <span className="mono text-lg font-bold text-gray-100">LOCAL<span className="text-cyan-400">CVE</span></span>
+            <span className="mono text-lg font-bold text-gray-100">CVE <span className="text-cyan-400">Tracker</span></span>
           </div>
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -126,8 +108,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => 
       {isMobileMenuOpen && (
         <div className="md:hidden fixed inset-0 z-30 pt-16" style={{ background: 'var(--cyber-surface)' }}>
           <nav className="px-4 py-6 space-y-1">
-            <NavItem id="dashboard" label="Overview" icon={LayoutDashboard} />
-            <NavItem id="cves" label="Threats" icon={Database} />
+            <NavItem id="cves" label="CVEs" icon={Database} />
             <NavItem id="alerts" label="Alerts" icon={Bell} />
             <NavItem id="watchlists" label="Watchlists" icon={Activity} />
             <NavItem id="jobs" label="Ingestion" icon={Terminal} />
