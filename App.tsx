@@ -43,6 +43,8 @@ const App: React.FC = () => {
       const q = new URLSearchParams();
       if (filters.text) q.set('search', filters.text);
       if (filters.cvss_min) q.set('cvss_min', filters.cvss_min.toString());
+      if (filters.published_from) q.set('published_from', filters.published_from);
+      if (filters.published_to) q.set('published_to', filters.published_to);
       q.set('limit', pageSize.toString());
       q.set('offset', (page * pageSize).toString());
 

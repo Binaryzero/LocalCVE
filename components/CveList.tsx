@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Search, Filter, Save, ExternalLink, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Cve, QueryModel } from '../types';
+import FilterPresets from './FilterPresets';
 
 interface CveListProps {
   cves: Cve[];
@@ -26,6 +28,15 @@ const CveList: React.FC<CveListProps> = ({
   onSelectCve
 }) => {
   const [showFilters, setShowFilters] = useState(false);
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  // Virtual scrolling setup - renders only visible rows for better performance
+  const rowVirtualizer = useVirtualizer({
+    count: cves.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 72, // Estimated row height in pixels
+    overscan: 5, // Number of items to render outside visible area
+  });
 
   const handleInputChange = (field: keyof QueryModel, value: any) => {
     onFilterChange({ ...filters, [field]: value });
@@ -55,7 +66,7 @@ const CveList: React.FC<CveListProps> = ({
     );
   };
 
-  const hasActiveSearch = filters.text?.trim() || filters.cvss_min > 0 || filters.kev;
+  const hasActiveSearch = filters.text?.trim() || filters.cvss_min > 0 || filters.kev || filters.published_from || filters.published_to;
 
   return (
     <div className="space-y-6">
@@ -91,6 +102,20 @@ const CveList: React.FC<CveListProps> = ({
         )}
       </div>
 
+      {/* Filter Presets */}
+      <div className="rounded-lg border p-4" style={{
+        background: 'var(--cyber-surface)',
+        borderColor: 'var(--cyber-border)'
+      }}>
+        <FilterPresets
+          currentFilters={filters}
+          onApplyPreset={(query) => {
+            onFilterChange(query);
+            onPageChange(0);
+          }}
+        />
+      </div>
+
       {/* Search and Filters */}
       <div className="rounded-lg border p-4" style={{
         background: 'var(--cyber-surface)',
@@ -124,102 +149,227 @@ const CveList: React.FC<CveListProps> = ({
 
         {/* Filter Panel */}
         {showFilters && (
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-lg border" style={{
+          <div className="mt-4 space-y-4 p-4 rounded-lg border" style={{
             background: 'rgba(6, 182, 212, 0.03)',
             borderColor: 'var(--cyber-border)'
           }}>
-            <div className="md:col-span-2">
-              <label className="block text-xs font-semibold text-gray-400 mb-2 mono">MIN CVSS SCORE</label>
-              <div className="flex items-center gap-4">
-                <input
-                  type="range"
-                  min="0"
-                  max="10"
-                  step="1"
-                  className="flex-1 h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ background: 'var(--cyber-border)' }}
-                  value={Math.floor(filters.cvss_min || 0)}
-                  onChange={(e) => handleInputChange('cvss_min', parseFloat(e.target.value))}
-                />
-                <input
-                  type="number"
-                  min="0"
-                  max="10"
-                  step="0.1"
-                  className="w-20 p-2.5 border rounded-lg bg-gray-900/50 text-gray-100 mono text-sm text-center focus:outline-none focus:border-cyan-500"
-                  style={{ borderColor: 'var(--cyber-border)' }}
-                  value={filters.cvss_min || 0}
-                  onChange={(e) => handleInputChange('cvss_min', Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)))}
-                />
+            {/* Row 1: CVSS and KEV */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-gray-400 mb-2 mono">MIN CVSS SCORE</label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="0"
+                    max="10"
+                    step="1"
+                    className="flex-1 h-2 rounded-lg appearance-none cursor-pointer"
+                    style={{ background: 'var(--cyber-border)' }}
+                    value={Math.floor(filters.cvss_min || 0)}
+                    onChange={(e) => handleInputChange('cvss_min', parseFloat(e.target.value))}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    max="10"
+                    step="0.1"
+                    className="w-20 p-2.5 border rounded-lg bg-gray-900/50 text-gray-100 mono text-sm text-center focus:outline-none focus:border-cyan-500"
+                    style={{ borderColor: 'var(--cyber-border)' }}
+                    value={filters.cvss_min || 0}
+                    onChange={(e) => handleInputChange('cvss_min', Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)))}
+                  />
+                </div>
+              </div>
+              <div className="flex items-end">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded bg-gray-900 border-gray-700 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
+                    checked={filters.kev || false}
+                    onChange={(e) => handleInputChange('kev', e.target.checked)}
+                  />
+                  <span className="text-sm text-gray-300 mono">KNOWN EXPLOITED (KEV)</span>
+                </label>
               </div>
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center space-x-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 rounded bg-gray-900 border-gray-700 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
-                  checked={filters.kev || false}
-                  onChange={(e) => handleInputChange('kev', e.target.checked)}
-                />
-                <span className="text-sm text-gray-300 mono">KNOWN EXPLOITED (KEV)</span>
-              </label>
+
+            {/* Row 2: Date Range */}
+            <div className="pt-3 border-t" style={{ borderColor: 'var(--cyber-border)' }}>
+              <label className="block text-xs font-semibold text-gray-400 mb-3 mono">PUBLISHED DATE RANGE</label>
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Quick Presets */}
+                <div className="flex gap-2">
+                  {[
+                    { label: '7D', days: 7 },
+                    { label: '30D', days: 30 },
+                    { label: '90D', days: 90 },
+                    { label: 'YTD', days: -1 },
+                  ].map(preset => {
+                    const getPresetDates = () => {
+                      const to = new Date();
+                      let from: Date;
+                      if (preset.days === -1) {
+                        from = new Date(to.getFullYear(), 0, 1);
+                      } else {
+                        from = new Date(to);
+                        from.setDate(from.getDate() - preset.days);
+                      }
+                      return {
+                        from: from.toISOString().split('T')[0],
+                        to: to.toISOString().split('T')[0]
+                      };
+                    };
+
+                    const isActive = () => {
+                      const { from, to } = getPresetDates();
+                      return filters.published_from === from && filters.published_to === to;
+                    };
+
+                    return (
+                      <button
+                        key={preset.label}
+                        onClick={() => {
+                          const { from, to } = getPresetDates();
+                          onFilterChange({
+                            ...filters,
+                            published_from: from,
+                            published_to: to
+                          });
+                          onPageChange(0);
+                        }}
+                        className={`px-3 py-1.5 rounded-lg border mono text-xs font-medium transition-all ${
+                          isActive()
+                            ? 'border-cyan-500 bg-cyan-500/20 text-cyan-400'
+                            : 'border-gray-700 text-gray-400 hover:border-gray-600'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Divider */}
+                <div className="h-6 w-px bg-gray-700" />
+
+                {/* Date Inputs */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    className="p-2 border rounded-lg bg-gray-900/50 text-gray-100 mono text-sm focus:outline-none focus:border-cyan-500"
+                    style={{ borderColor: 'var(--cyber-border)' }}
+                    value={filters.published_from || ''}
+                    onChange={(e) => handleInputChange('published_from', e.target.value || undefined)}
+                  />
+                  <span className="text-gray-500 mono text-xs">TO</span>
+                  <input
+                    type="date"
+                    className="p-2 border rounded-lg bg-gray-900/50 text-gray-100 mono text-sm focus:outline-none focus:border-cyan-500"
+                    style={{ borderColor: 'var(--cyber-border)' }}
+                    value={filters.published_to || ''}
+                    onChange={(e) => handleInputChange('published_to', e.target.value || undefined)}
+                  />
+                </div>
+
+                {/* Clear Dates */}
+                {(filters.published_from || filters.published_to) && (
+                  <button
+                    onClick={() => {
+                      onFilterChange({
+                        ...filters,
+                        published_from: undefined,
+                        published_to: undefined
+                      });
+                      onPageChange(0);
+                    }}
+                    className="px-2 py-1.5 rounded-lg border border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-all"
+                  >
+                    <X className="h-4 w-4" strokeWidth={1.5} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* CVE Table */}
+      {/* CVE Table with Virtual Scrolling */}
       <div className="rounded-lg border overflow-hidden" style={{
         background: 'var(--cyber-surface)',
         borderColor: 'var(--cyber-border)'
       }}>
-        <div className="overflow-x-auto">
-          <table className="min-w-full">
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--cyber-border)' }}>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono bg-gray-900/30">
-                  CVE ID
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono bg-gray-900/30">
-                  SEVERITY
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono bg-gray-900/30">
-                  DESCRIPTION
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono bg-gray-900/30">
-                  PUBLISHED
-                </th>
-                <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider mono bg-gray-900/30">
-                  REFS
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {!hasActiveSearch ? (
-                <tr>
-                  <td colSpan={5} className="px-6 py-20 text-center">
-                    <div className="flex flex-col items-center space-y-4">
-                      <div className="w-16 h-16 rounded-lg border border-cyan-500/30 flex items-center justify-center bg-cyan-500/5">
-                        <Search className="h-8 w-8 text-cyan-400" strokeWidth={1.5} />
-                      </div>
-                      <div>
-                        <p className="text-gray-300 mono text-sm font-medium mb-1">SEARCH THE CVE DATABASE</p>
-                        <p className="text-gray-500 mono text-xs">Enter a CVE ID, keyword, or use filters to find vulnerabilities</p>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              ) : cves.length > 0 ? (
-                cves.map((cve, index) => (
-                  <tr
+        {/* Header Row - Fixed */}
+        <div
+          className="grid bg-gray-900/30"
+          style={{
+            gridTemplateColumns: '180px 140px 1fr 120px 80px',
+            borderBottom: '1px solid var(--cyber-border)'
+          }}
+        >
+          <div className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono">
+            CVE ID
+          </div>
+          <div className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono">
+            SEVERITY
+          </div>
+          <div className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono">
+            DESCRIPTION
+          </div>
+          <div className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono">
+            PUBLISHED
+          </div>
+          <div className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider mono">
+            REFS
+          </div>
+        </div>
+
+        {/* Body - Virtualized */}
+        {!hasActiveSearch ? (
+          <div className="px-6 py-20 text-center">
+            <div className="flex flex-col items-center space-y-4">
+              <div className="w-16 h-16 rounded-lg border border-cyan-500/30 flex items-center justify-center bg-cyan-500/5">
+                <Search className="h-8 w-8 text-cyan-400" strokeWidth={1.5} />
+              </div>
+              <div>
+                <p className="text-gray-300 mono text-sm font-medium mb-1">SEARCH THE CVE DATABASE</p>
+                <p className="text-gray-500 mono text-xs">Enter a CVE ID, keyword, or use filters to find vulnerabilities</p>
+              </div>
+            </div>
+          </div>
+        ) : cves.length > 0 ? (
+          <div
+            ref={parentRef}
+            className="overflow-auto"
+            style={{ maxHeight: '600px' }}
+          >
+            <div
+              style={{
+                height: `${rowVirtualizer.getTotalSize()}px`,
+                width: '100%',
+                position: 'relative',
+              }}
+            >
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const cve = cves[virtualRow.index];
+                const isLast = virtualRow.index === cves.length - 1;
+                return (
+                  <div
                     key={cve.id}
-                    onClick={() => onSelectCve(cve.id)}
-                    className="group cursor-pointer transition-all hover:bg-cyan-500/5"
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
+                    className="grid group cursor-pointer transition-all hover:bg-cyan-500/5"
                     style={{
-                      borderBottom: index < cves.length - 1 ? '1px solid var(--cyber-border)' : 'none'
+                      gridTemplateColumns: '180px 140px 1fr 120px 80px',
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start}px)`,
+                      borderBottom: !isLast ? '1px solid var(--cyber-border)' : 'none'
                     }}
+                    onClick={() => onSelectCve(cve.id)}
                   >
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center space-x-2">
                         <span className="text-sm font-bold text-cyan-400 mono group-hover:text-cyan-300 transition-colors">
                           {cve.id}
@@ -230,21 +380,21 @@ const CveList: React.FC<CveListProps> = ({
                           </span>
                         )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {getSeverityBadge(cve.cvssV3Severity, cve.cvssV3Score)}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-400 max-w-2xl">
+                    </div>
+                    <div className="px-6 py-4 whitespace-nowrap">
+                      {getSeverityBadge(cve.cvssSeverity, cve.cvssScore)}
+                    </div>
+                    <div className="px-6 py-4 text-sm text-gray-400">
                       <div className="line-clamp-2 leading-relaxed">{cve.description}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 mono">
+                    </div>
+                    <div className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 mono">
                       {new Date(cve.published).toLocaleDateString('en-US', {
                         year: 'numeric',
                         month: '2-digit',
                         day: '2-digit'
                       }).replace(/\//g, '-')}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-center">
+                    </div>
+                    <div className="px-6 py-4 whitespace-nowrap text-center">
                       {cve.references.length > 0 && (
                         <a
                           href={cve.references[0]}
@@ -256,24 +406,22 @@ const CveList: React.FC<CveListProps> = ({
                           <ExternalLink className="h-4 w-4" strokeWidth={1.5} />
                         </a>
                       )}
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={5} className="px-6 py-16 text-center">
-                    <div className="flex flex-col items-center space-y-3">
-                      <div className="w-12 h-12 rounded-lg border border-gray-700 flex items-center justify-center">
-                        <Search className="h-6 w-6 text-gray-600" strokeWidth={1.5} />
-                      </div>
-                      <p className="text-gray-500 mono text-sm">NO RESULTS MATCH YOUR SEARCH</p>
                     </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="px-6 py-16 text-center">
+            <div className="flex flex-col items-center space-y-3">
+              <div className="w-12 h-12 rounded-lg border border-gray-700 flex items-center justify-center">
+                <Search className="h-6 w-6 text-gray-600" strokeWidth={1.5} />
+              </div>
+              <p className="text-gray-500 mono text-sm">NO RESULTS MATCH YOUR SEARCH</p>
+            </div>
+          </div>
+        )}
 
         {/* Pagination */}
         {totalPages > 1 && (

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, ExternalLink, Shield, Calendar, Clock, Database, Copy, Check } from 'lucide-react';
+import CvssVersionTabs from './CvssVersionTabs';
 
 interface CveDetailProps {
     id: string;
@@ -127,6 +128,23 @@ const CveDetail: React.FC<CveDetailProps> = ({ id, onBack }) => {
 
                 {/* Content */}
                 <div className="p-8 space-y-8">
+                    {/* CVSS Scores - Multi-Version Display */}
+                    <section>
+                        <h2 className="text-lg font-semibold text-gray-100 mono mb-4 flex items-center">
+                            <div className="w-1 h-5 bg-cyan-400 mr-3 rounded-full" />
+                            VULNERABILITY SEVERITY
+                        </h2>
+                        <CvssVersionTabs
+                            metrics={data.metrics || []}
+                            cvss2Score={data.cvss2Score}
+                            cvss2Severity={data.cvss2Severity}
+                            cvss30Score={data.cvss30Score}
+                            cvss30Severity={data.cvss30Severity}
+                            cvss31Score={data.cvss31Score}
+                            cvss31Severity={data.cvss31Severity}
+                        />
+                    </section>
+
                     {/* Description */}
                     <section>
                         <h2 className="text-lg font-semibold text-gray-100 mono mb-4 flex items-center">

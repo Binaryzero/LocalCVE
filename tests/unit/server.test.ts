@@ -442,6 +442,58 @@ describe('API Endpoints', () => {
             expect(res.statusCode).toBe(200);
         });
 
+        test('should handle published_from date parameter', async () => {
+            const req = new MockRequest('GET', '/api/cves?published_from=2024-01-01');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+        });
+
+        test('should handle published_to date parameter', async () => {
+            const req = new MockRequest('GET', '/api/cves?published_to=2024-12-31');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+        });
+
+        test('should handle date range parameters together', async () => {
+            const req = new MockRequest('GET', '/api/cves?published_from=2024-01-01&published_to=2024-12-31');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+        });
+
+        test('should ignore invalid date format', async () => {
+            // Invalid date should be ignored, not cause error
+            const req = new MockRequest('GET', '/api/cves?published_from=not-a-date');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            // Should still return 200 (invalid date is simply ignored)
+            expect(res.statusCode).toBe(200);
+        });
+
+        test('should filter CVEs by date range', async () => {
+            // Our test CVE is published at 2099-01-01
+            const req = new MockRequest('GET', '/api/cves?published_from=2099-01-01&published_to=2099-12-31');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            const data = res.getJson();
+            // Should find our future-dated test CVE
+            const testCve = data.cves.find((c: any) => c.id === listTestCveId);
+            expect(testCve).toBeDefined();
+        });
+
         test('should handle search parameter', async () => {
             const req = new MockRequest('GET', '/api/cves?search=test');
             const res = new MockResponse();

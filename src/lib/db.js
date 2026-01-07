@@ -50,8 +50,26 @@ CREATE TABLE IF NOT EXISTS job_runs (
   end_time TEXT,
   status TEXT,
   items_processed INTEGER,
-  error TEXT
+  error TEXT,
+  progress_percent INTEGER DEFAULT 0,
+  items_added INTEGER DEFAULT 0,
+  items_updated INTEGER DEFAULT 0,
+  items_unchanged INTEGER DEFAULT 0,
+  current_phase TEXT,
+  cancel_requested INTEGER DEFAULT 0,
+  last_heartbeat TEXT,
+  total_files INTEGER
 );
+CREATE TABLE IF NOT EXISTS job_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL,
+  timestamp TEXT NOT NULL,
+  level TEXT NOT NULL,
+  message TEXT NOT NULL,
+  metadata TEXT,
+  FOREIGN KEY (job_id) REFERENCES job_runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_job_logs_job_id ON job_logs(job_id);
 CREATE TABLE IF NOT EXISTS cve_changes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   cve_id TEXT,
@@ -84,6 +102,24 @@ CREATE TABLE IF NOT EXISTS system_metadata (
 `;
 
 db.exec(initSql);
+
+// Migrate existing job_runs table to add new columns (safe to run multiple times)
+const jobRunsColumns = db.pragma('table_info(job_runs)').map(c => c.name);
+const newJobRunsColumns = [
+  { name: 'progress_percent', def: 'INTEGER DEFAULT 0' },
+  { name: 'items_added', def: 'INTEGER DEFAULT 0' },
+  { name: 'items_updated', def: 'INTEGER DEFAULT 0' },
+  { name: 'items_unchanged', def: 'INTEGER DEFAULT 0' },
+  { name: 'current_phase', def: 'TEXT' },
+  { name: 'cancel_requested', def: 'INTEGER DEFAULT 0' },
+  { name: 'last_heartbeat', def: 'TEXT' },
+  { name: 'total_files', def: 'INTEGER' }
+];
+for (const col of newJobRunsColumns) {
+  if (!jobRunsColumns.includes(col.name)) {
+    db.prepare(`ALTER TABLE job_runs ADD COLUMN ${col.name} ${col.def}`).run();
+  }
+}
 
 // FTS Schema Handling
 try {

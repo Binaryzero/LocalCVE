@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync, spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import db from '../db.js';
 import { matchesQuery } from '../matcher.js';
@@ -15,6 +15,74 @@ const CONCURRENCY = 10; // Parallel file reading/parsing
 // --- Helpers ---
 const getTimestamp = () => new Date().toISOString();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// --- SSE Client Registry (for real-time log streaming) ---
+const sseClients = new Map(); // clientId -> { res, jobId }
+
+export function registerSseClient(clientId, res, jobId) {
+    sseClients.set(clientId, { res, jobId });
+}
+
+export function unregisterSseClient(clientId) {
+    sseClients.delete(clientId);
+}
+
+function broadcastToSseClients(jobId, data) {
+    for (const [, client] of sseClients) {
+        if (client.jobId === jobId) {
+            try {
+                client.res.write(`data: ${JSON.stringify(data)}\n\n`);
+            } catch {
+                // Client disconnected, will be cleaned up on next request
+            }
+        }
+    }
+}
+
+// --- JobLogger Class ---
+class JobLogger {
+    constructor(jobId) {
+        this.jobId = jobId;
+    }
+
+    log(level, message, metadata = null) {
+        const timestamp = getTimestamp();
+        const metadataJson = metadata ? JSON.stringify(metadata) : null;
+
+        // Persist to database (deferred import to avoid circular dependency)
+        try {
+            statements.insertJobLog.run(this.jobId, timestamp, level, message, metadataJson);
+        } catch {
+            // Statements may not be ready yet during early init
+            console.log(`[Job ${this.jobId}] [${level}] ${message}`);
+        }
+
+        // Broadcast to SSE clients
+        broadcastToSseClients(this.jobId, { timestamp, level, message, metadata });
+
+        // Also log to console for server visibility
+        const prefix = `[Job ${this.jobId}]`;
+        if (level === 'ERROR') {
+            console.error(prefix, message, metadata || '');
+        } else if (level === 'WARN') {
+            console.warn(prefix, message, metadata || '');
+        } else {
+            console.log(prefix, message, metadata ? JSON.stringify(metadata) : '');
+        }
+    }
+
+    info(message, metadata = null) {
+        this.log('INFO', message, metadata);
+    }
+
+    warn(message, metadata = null) {
+        this.log('WARN', message, metadata);
+    }
+
+    error(message, metadata = null) {
+        this.log('ERROR', message, metadata);
+    }
+}
 
 function ensureDir(dir) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -53,30 +121,102 @@ function* walk(dir) {
 }
 
 // --- Git Operations ---
-function gitExec(args, cwd = REPO_DIR) {
-    try {
-        return execSync(`git ${args}`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    } catch (e) {
-        throw new Error(`Git command failed: git ${args}`);
+const GIT_CLONE_TIMEOUT = 600000; // 10 minutes
+const GIT_PULL_TIMEOUT = 300000;  // 5 minutes
+const GIT_MAX_RETRIES = 3;
+
+function gitSpawn(args, cwd = REPO_DIR, timeout = 60000) {
+    const result = spawnSync('git', args, {
+        cwd,
+        encoding: 'utf8',
+        timeout,
+        maxBuffer: 50 * 1024 * 1024 // 50MB buffer
+    });
+
+    if (result.error) {
+        if (result.error.code === 'ETIMEDOUT') {
+            throw new Error(`Git command timed out after ${timeout}ms: git ${args.join(' ')}`);
+        }
+        throw new Error(`Git command failed: git ${args.join(' ')} - ${result.error.message}`);
+    }
+
+    if (result.status !== 0) {
+        throw new Error(`Git command failed with code ${result.status}: git ${args.join(' ')}`);
+    }
+
+    return (result.stdout || '').trim();
+}
+
+async function gitSpawnWithRetry(args, cwd, timeout, logger, maxRetries = GIT_MAX_RETRIES) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return gitSpawn(args, cwd, timeout);
+        } catch (err) {
+            if (attempt === maxRetries) {
+                logger.error(`Git operation failed after ${maxRetries} attempts`, { args: args.join(' '), error: err.message });
+                throw err;
+            }
+            const delay = 5000 * attempt; // Exponential backoff
+            logger.warn(`Git operation failed, retrying in ${delay}ms`, { attempt, maxRetries, error: err.message });
+            await sleep(delay);
+        }
     }
 }
 
-async function prepareRepo() {
+async function prepareRepo(logger, checkCancelled) {
     ensureDir(DATA_DIR);
 
     if (!fs.existsSync(path.join(REPO_DIR, '.git'))) {
-        console.log('[Ingest] Cloning cvelistV5 (this may take a few minutes)...');
-        execSync(`git clone --depth 1 ${REPO_URL} ${REPO_DIR}`, { stdio: 'inherit' });
-        return { mode: 'full', oldHash: null, newHash: gitExec('rev-parse HEAD') };
-    } else {
-        console.log('[Ingest] Pulling updates...');
-        const oldHash = gitExec('rev-parse HEAD');
-        try {
-            execSync('git pull', { cwd: REPO_DIR, stdio: 'inherit' });
-        } catch (e) {
-            console.warn('[Ingest] Git pull failed, reaching out to current local data.');
+        logger.info('Cloning cvelistV5 repository (this may take several minutes)...');
+
+        // Check cancellation before long operation
+        if (checkCancelled()) return { cancelled: true };
+
+        const cloneResult = spawnSync('git', ['clone', '--depth', '1', REPO_URL, REPO_DIR], {
+            encoding: 'utf8',
+            timeout: GIT_CLONE_TIMEOUT,
+            maxBuffer: 50 * 1024 * 1024
+        });
+
+        if (cloneResult.error) {
+            if (cloneResult.error.code === 'ETIMEDOUT') {
+                throw new Error(`Git clone timed out after ${GIT_CLONE_TIMEOUT / 1000} seconds`);
+            }
+            throw new Error(`Git clone failed: ${cloneResult.error.message}`);
         }
-        const newHash = gitExec('rev-parse HEAD');
+
+        if (cloneResult.status !== 0) {
+            throw new Error(`Git clone failed with code ${cloneResult.status}`);
+        }
+
+        const newHash = gitSpawn(['rev-parse', 'HEAD']);
+        logger.info('Repository cloned successfully', { commit: newHash.substring(0, 8) });
+        return { mode: 'full', oldHash: null, newHash };
+    } else {
+        logger.info('Pulling updates from repository...');
+        const oldHash = gitSpawn(['rev-parse', 'HEAD']);
+
+        // Check cancellation before long operation
+        if (checkCancelled()) return { cancelled: true };
+
+        const pullResult = spawnSync('git', ['pull'], {
+            cwd: REPO_DIR,
+            encoding: 'utf8',
+            timeout: GIT_PULL_TIMEOUT,
+            maxBuffer: 50 * 1024 * 1024
+        });
+
+        if (pullResult.error) {
+            if (pullResult.error.code === 'ETIMEDOUT') {
+                logger.warn(`Git pull timed out after ${GIT_PULL_TIMEOUT / 1000}s, using local data`);
+            } else {
+                logger.warn('Git pull failed, using local data', { error: pullResult.error.message });
+            }
+        } else if (pullResult.status !== 0) {
+            logger.warn('Git pull failed, using local data', { exitCode: pullResult.status });
+        }
+
+        const newHash = gitSpawn(['rev-parse', 'HEAD']);
 
         if (oldHash === newHash) {
             // Even if git hasn't changed, check if database is properly populated
@@ -85,13 +225,13 @@ async function prepareRepo() {
                 const result = db.prepare('SELECT count(*) as c FROM cves').get();
                 count = result ? result.c : 0;
             } catch (e) {
-                console.warn('[Ingest] Database query failed, forcing full scan:', e.message);
+                logger.warn('Database query failed, forcing full scan', { error: e.message });
                 return { mode: 'full', oldHash, newHash };
             }
 
             // If database is empty or suspiciously small, force full scan
             if (count === 0) {
-                console.log('[Ingest] Database is empty, forcing full scan');
+                logger.info('Database is empty, forcing full scan');
                 return { mode: 'full', oldHash, newHash };
             }
 
@@ -106,18 +246,18 @@ async function prepareRepo() {
 
             // If we don't have a stored hash, we can't be sure database is current
             if (!storedHash) {
-                console.log('[Ingest] No stored commit hash found, forcing full scan to ensure database is current');
+                logger.info('No stored commit hash found, forcing full scan to ensure database is current');
                 return { mode: 'full', oldHash, newHash };
             }
 
             // Only skip if we have a reasonable number of CVEs (>100,000 is full dataset)
             // AND git truly hasn't changed AND we have a stored hash matching current
             if (count < 100000) {
-                console.log(`[Ingest] Database has only ${count} CVEs (expected ~250k), forcing full scan`);
+                logger.info('Database has insufficient CVEs, forcing full scan', { count, expected: '~250k' });
                 return { mode: 'full', oldHash, newHash };
             }
 
-            console.log(`[Ingest] No git changes and database has ${count} CVEs, skipping`);
+            logger.info('No git changes and database is current, skipping ingestion', { cveCount: count });
             return { mode: 'incremental', oldHash, newHash, noChanges: true };
         }
 
@@ -131,36 +271,40 @@ async function prepareRepo() {
             const countResult = db.prepare('SELECT count(*) as c FROM cves').get();
             dbCount = countResult ? countResult.c : 0;
         } catch (e) {
-            console.warn('[Ingest] Database check failed, forcing full scan:', e.message);
+            logger.warn('Database check failed, forcing full scan', { error: e.message });
             return { mode: 'full', oldHash, newHash };
         }
 
         // If no stored hash, we don't know where we left off - must do full scan
         if (!storedHash) {
-            console.log('[Ingest] No stored commit hash found after git pull, forcing full scan to catch up');
+            logger.info('No stored commit hash found after git pull, forcing full scan to catch up');
             return { mode: 'full', oldHash, newHash };
         }
 
         // If database is suspiciously small, do full scan to ensure completeness
         if (dbCount < 100000) {
-            console.log(`[Ingest] Database has only ${dbCount} CVEs after git pull (expected ~250k), forcing full scan`);
+            logger.info('Database has insufficient CVEs after git pull, forcing full scan', { count: dbCount, expected: '~250k' });
             return { mode: 'full', oldHash, newHash };
         }
 
         // We have a stored hash and good CVE count - use incremental diff from stored hash to new hash
-        console.log(`[Ingest] Incremental update from ${storedHash.substring(0, 8)} to ${newHash.substring(0, 8)}`);
+        logger.info('Incremental update mode', { fromCommit: storedHash.substring(0, 8), toCommit: newHash.substring(0, 8) });
         return { mode: 'incremental', oldHash: storedHash, newHash };
     }
 }
 
-function getChangedFiles(oldHash, newHash) {
+function getChangedFiles(oldHash, newHash, logger = null) {
+    // Use provided logger or fallback to console
+    const log = logger || { info: () => {}, warn: console.warn.bind(console) };
     try {
-        const diffOutput = gitExec(`diff --name-only ${oldHash} ${newHash}`);
-        return diffOutput.split('\n')
+        const diffOutput = gitSpawn(['diff', '--name-only', oldHash, newHash]);
+        const files = diffOutput.split('\n')
             .filter(line => line.startsWith('cves/') && line.endsWith('.json'))
             .map(line => path.join(REPO_DIR, line));
+        log.info('Found changed files', { count: files.length });
+        return files;
     } catch (e) {
-        console.warn('[Ingest] Failed to calc diff, falling back to full scan.', e.message);
+        log.warn('Failed to calculate diff, falling back to full scan', { error: e.message });
         return null; // Signals full scan needed
     }
 }
@@ -292,6 +436,33 @@ export function normalizeCve5(raw) {
 
 // --- Database Operations ---
 const statements = {
+    // Job management
+    insertJob: db.prepare(`
+      INSERT INTO job_runs (start_time, status, items_processed, last_heartbeat)
+      VALUES (?, 'RUNNING', 0, ?) RETURNING id
+    `),
+    updateJob: db.prepare(`
+      UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, error = ? WHERE id = ?
+    `),
+    updateJobProgress: db.prepare(`
+      UPDATE job_runs SET
+        progress_percent = ?, items_processed = ?, items_added = ?, items_updated = ?,
+        items_unchanged = ?, current_phase = ?, last_heartbeat = ?, total_files = ?
+      WHERE id = ?
+    `),
+    checkCancelRequested: db.prepare('SELECT cancel_requested FROM job_runs WHERE id = ?'),
+    requestJobCancel: db.prepare('UPDATE job_runs SET cancel_requested = 1 WHERE id = ?'),
+    updateJobHeartbeat: db.prepare('UPDATE job_runs SET last_heartbeat = ? WHERE id = ?'),
+
+    // Job logging
+    insertJobLog: db.prepare(`
+      INSERT INTO job_logs (job_id, timestamp, level, message, metadata)
+      VALUES (?, ?, ?, ?, ?)
+    `),
+    getJobLogs: db.prepare('SELECT * FROM job_logs WHERE job_id = ? ORDER BY id ASC'),
+    getJobLogsSince: db.prepare('SELECT * FROM job_logs WHERE job_id = ? AND id > ? ORDER BY id ASC'),
+
+    // CVE operations
     getCveHash: db.prepare('SELECT normalized_hash, json FROM cves WHERE id = ?'),
     upsertCve: db.prepare(`
       INSERT INTO cves (id, description, published, last_modified, vuln_status, normalized_hash, json)
@@ -309,8 +480,6 @@ const statements = {
     deleteFts: db.prepare('DELETE FROM cves_fts WHERE id = ?'),
     insertFts: db.prepare('INSERT INTO cves_fts (id, description, refs) VALUES (?, ?, ?)'),
     insertChange: db.prepare('INSERT INTO cve_changes (cve_id, change_date, diff_json) VALUES (?, ?, ?)'),
-    insertJob: db.prepare("INSERT INTO job_runs (start_time, status, items_processed) VALUES (?, 'RUNNING', 0) RETURNING id"),
-    updateJob: db.prepare("UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, error = ? WHERE id = ?"),
     setMeta: db.prepare("INSERT INTO system_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"),
     getActiveWatchlists: db.prepare('SELECT * FROM watchlists WHERE enabled = 1'),
     insertAlert: db.prepare(`
@@ -395,102 +564,202 @@ const processBatch = db.transaction((batch) => {
 
 // --- Main Ingest Logic ---
 
+// Progress update frequency (more frequent than BATCH_SIZE for responsive UI)
+const PROGRESS_UPDATE_INTERVAL = 100;
+
 async function runIngest(jobId) {
+    const logger = new JobLogger(jobId);
     let totalProcessed = 0;
+    let stats = { added: 0, updated: 0, unchanged: 0 };
+    let totalFiles = 0;
+    let lastHeartbeat = Date.now();
+
+    // Cancellation check helper
+    const checkCancelled = () => {
+        const result = statements.checkCancelRequested.get(jobId);
+        return result?.cancel_requested === 1;
+    };
+
+    // Update progress helper
+    const updateProgress = (phase, processed = totalProcessed) => {
+        const now = Date.now();
+        // Always update heartbeat, but throttle full progress updates
+        if (now - lastHeartbeat > 5000 || processed % PROGRESS_UPDATE_INTERVAL === 0) {
+            const percent = totalFiles > 0 ? Math.round((processed / totalFiles) * 100) : 0;
+            statements.updateJobProgress.run(
+                percent, processed, stats.added, stats.updated, stats.unchanged,
+                phase, getTimestamp(), totalFiles, jobId
+            );
+            lastHeartbeat = now;
+        }
+    };
+
     try {
+        logger.info('Starting ingestion job');
+        updateProgress('INITIALIZING');
+
         refreshWatchlists();
-        const { mode, oldHash, newHash, noChanges } = await prepareRepo();
+        logger.info('Loaded active watchlists', { count: activeWatchlists.length });
+
+        // Check cancellation before git operations
+        if (checkCancelled()) {
+            logger.info('Job cancelled before repository preparation');
+            statements.updateJob.run(getTimestamp(), 'CANCELLED', 0, 'Cancelled by user', jobId);
+            return;
+        }
+
+        updateProgress('PREPARING_REPO');
+        const repoResult = await prepareRepo(logger, checkCancelled);
+
+        if (repoResult.cancelled) {
+            logger.info('Job cancelled during repository preparation');
+            statements.updateJob.run(getTimestamp(), 'CANCELLED', 0, 'Cancelled by user', jobId);
+            return;
+        }
+
+        const { mode, oldHash, newHash, noChanges } = repoResult;
 
         if (noChanges) {
+            logger.info('No changes to process');
             statements.updateJob.run(getTimestamp(), 'COMPLETED', 0, 'No updates found', jobId);
             return;
         }
 
-        const fileSource = (mode === 'full') ? walk(path.join(REPO_DIR, 'cves')) : getChangedFiles(oldHash, newHash);
-        if (!fileSource && mode === 'full') throw new Error("Could not initialize file scan");
+        // Determine file source
+        updateProgress('SCANNING_FILES');
+        let fileSource;
+        if (mode === 'full') {
+            fileSource = walk(path.join(REPO_DIR, 'cves'));
+            // Count total files for progress (this is expensive but worth it for UX)
+            const allFiles = [...walk(path.join(REPO_DIR, 'cves'))];
+            totalFiles = allFiles.length;
+            fileSource = allFiles; // Use the array we just created
+            logger.info('Full scan mode', { totalFiles });
+        } else {
+            fileSource = getChangedFiles(oldHash, newHash, logger);
+            if (!fileSource) {
+                // Fallback to full scan
+                logger.warn('Diff failed, falling back to full scan');
+                const allFiles = [...walk(path.join(REPO_DIR, 'cves'))];
+                totalFiles = allFiles.length;
+                fileSource = allFiles;
+            } else {
+                totalFiles = fileSource.length;
+            }
+        }
+
+        if (!fileSource || totalFiles === 0) {
+            logger.info('No files to process');
+            statements.updateJob.run(getTimestamp(), 'COMPLETED', 0, 'No files to process', jobId);
+            return;
+        }
+
+        logger.info('Starting file processing', { mode, totalFiles });
+        updateProgress('PROCESSING');
 
         let batch = [];
-        console.log(`[Ingest] Starting ingestion (${mode} mode)...`);
+        let filesRead = 0;
 
         const processFile = async (filePath) => {
             try {
                 const content = await fs.promises.readFile(filePath, 'utf8');
                 return normalizeCve5(JSON.parse(content));
             } catch (err) {
-                // console.warn(`[Ingest] Failed to parse ${filePath}:`, err.message); // Too noisy
+                // Silent failure for parse errors (too noisy otherwise)
                 return null;
             }
         };
 
-        if (Array.isArray(fileSource)) {
-            // Incremental: simple loop
-            for (const file of fileSource) {
-                const normalized = await processFile(file);
-                if (normalized) batch.push(normalized);
-                if (batch.length >= BATCH_SIZE) {
-                    refreshWatchlists(); // Ensure we have latest criteria
-                    processBatch(batch);
-                    totalProcessed += batch.length;
-                    batch = [];
-                    statements.updateJob.run(null, 'RUNNING', totalProcessed, null, jobId);
-                }
+        // Process files with cancellation checks and progress updates
+        for (const file of fileSource) {
+            // Check cancellation every 100 files
+            if (filesRead % 100 === 0 && checkCancelled()) {
+                logger.info('Job cancelled during file processing', { processed: totalProcessed });
+                statements.updateJob.run(getTimestamp(), 'CANCELLED', totalProcessed, 'Cancelled by user', jobId);
+                return;
             }
-        } else {
-            // Full: Generator-based with concurrency
-            let active = [];
-            for (const file of fileSource) {
-                active.push(processFile(file).then(n => {
-                    if (n) batch.push(n);
-                    if (batch.length >= BATCH_SIZE) {
-                        refreshWatchlists();
-                        processBatch(batch);
-                        totalProcessed += batch.length;
-                        batch = [];
-                        statements.updateJob.run(null, 'RUNNING', totalProcessed, null, jobId);
-                        console.log(`[Ingest] Processed ${totalProcessed}...`);
-                    }
-                }));
 
-                if (active.length >= CONCURRENCY) {
-                    await Promise.all(active);
-                    active = [];
+            const normalized = await processFile(file);
+            filesRead++;
+
+            if (normalized) {
+                // Track if this is a new or updated CVE
+                const existing = statements.getCveHash.get(normalized.id);
+                if (!existing) {
+                    stats.added++;
+                } else if (existing.normalized_hash !== computeHash(normalized)) {
+                    stats.updated++;
+                } else {
+                    stats.unchanged++;
                 }
+
+                batch.push(normalized);
             }
-            await Promise.all(active);
+
+            if (batch.length >= BATCH_SIZE) {
+                refreshWatchlists();
+                processBatch(batch);
+                totalProcessed += batch.length;
+                batch = [];
+                updateProgress('PROCESSING', totalProcessed);
+                logger.info('Batch processed', { totalProcessed, added: stats.added, updated: stats.updated });
+            }
+
+            // Update progress for UI responsiveness
+            if (filesRead % PROGRESS_UPDATE_INTERVAL === 0) {
+                updateProgress('PROCESSING', totalProcessed);
+            }
         }
 
+        // Process remaining batch
         if (batch.length > 0) {
             processBatch(batch);
             totalProcessed += batch.length;
         }
 
+        // Final update
         statements.setMeta.run('cvelist_commit', newHash);
+        updateProgress('COMPLETED', totalProcessed);
+
+        logger.info('Ingestion completed successfully', {
+            totalProcessed,
+            added: stats.added,
+            updated: stats.updated,
+            unchanged: stats.unchanged
+        });
+
         statements.updateJob.run(getTimestamp(), 'COMPLETED', totalProcessed, null, jobId);
-        console.log(`[Ingest] Completed. ${totalProcessed} items processed.`);
 
     } catch (err) {
-        console.error('[Ingest] Failure:', err);
+        logger.error('Ingestion failed', { error: err.message, stack: err.stack });
         statements.updateJob.run(getTimestamp(), 'FAILED', totalProcessed, err.message, jobId);
     }
 }
 
 export function run() {
-    const jobId = statements.insertJob.get(getTimestamp()).id;
+    const timestamp = getTimestamp();
+    const jobId = statements.insertJob.get(timestamp, timestamp).id;
     runIngest(jobId).catch(err => console.error('Ingest error:', err));
     return jobId;
 }
 
-// Export helper functions for testing
+// Cancel a running job
+export function cancelJob(jobId) {
+    statements.requestJobCancel.run(jobId);
+}
+
+// Export helper functions for testing and external use
 export {
     computeHash,
     getDiff,
     ensureDir,
     getTimestamp,
     walk,
-    gitExec,
+    gitSpawn,
     getChangedFiles,
     prepareRepo,
     processBatch,
     refreshWatchlists,
-    statements
+    statements,
+    JobLogger
 };

@@ -86,6 +86,50 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
 - ✓ Made grid pattern more subtle (nearly invisible)
 - ✓ Slimmed scrollbar design for minimal appearance
 - ✓ All E2E tests passing (3/3)
+- ✓ **Ingestion System Overhaul** (Jan 6, 2026)
+- ✓ Complete revamp of job management system:
+  - ✓ Added job cancellation mechanism with cooperative cancellation checkpoints
+  - ✓ Added persistent job logging (job_logs table with DB storage)
+  - ✓ Added real-time log streaming via Server-Sent Events (SSE)
+  - ✓ Added git operation timeouts (10min clone, 5min pull) with retry logic
+  - ✓ Added stuck job auto-detection (marks jobs FAILED if no heartbeat for 10+ min)
+  - ✓ Added detailed progress tracking (added/updated/unchanged counts)
+  - ✓ Added progress percentage with responsive UI updates every 100 files
+  - ✓ Migrated from execSync to spawnSync for safer git operations
+- ✓ New database columns: progress_percent, items_added, items_updated, items_unchanged, current_phase, cancel_requested, last_heartbeat, total_files
+- ✓ New API endpoints:
+  - ✓ POST /api/jobs/:id/cancel - Request job cancellation
+  - ✓ GET /api/jobs/:id/logs - Retrieve job logs
+  - ✓ GET /api/jobs/:id/logs/stream - SSE streaming for real-time logs
+- ✓ Enhanced Jobs.tsx UI:
+  - ✓ Cancel button for running jobs
+  - ✓ Progress bar with percentage
+  - ✓ Change counts display (+added, ~updated, =unchanged)
+  - ✓ Expandable log panel with real-time streaming
+  - ✓ CANCELLED status badge support
+- ✓ Build verified, unit tests passing (210/213)
+- ✓ **Phase 1 UI Enhancements** (Jan 6, 2026)
+- ✓ Multi-Version CVSS Display:
+  - ✓ Created CvssVersionTabs component with tabbed interface
+  - ✓ Visual comparison chart using Recharts
+  - ✓ CVSS vector string breakdown with tooltips
+  - ✓ Severity-based color coding
+- ✓ Date Range Filtering:
+  - ✓ Added published_from/published_to API parameters
+  - ✓ Native date input fields in filter panel
+  - ✓ Quick presets (7D, 30D, 90D, YTD)
+  - ✓ Clear dates button
+- ✓ Filter Presets:
+  - ✓ Created FilterPresets component
+  - ✓ Built-in presets: Critical Only, High + Recent, Known Exploited
+  - ✓ Custom preset saving to localStorage
+  - ✓ Preset activation detection
+- ✓ Virtual Scrolling:
+  - ✓ Implemented @tanstack/react-virtual
+  - ✓ Grid-based layout replacing table
+  - ✓ 600px max height with virtualized rows
+  - ✓ 72px estimated row height with 5 item overscan
+- ✓ 218 unit tests passing, build verified
 
 ## Critical Missing Features
 
@@ -124,7 +168,7 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
 - ✓ Update frontend to use server-side search/filtering
 - ✓ Add KEV filtering support to alerts
 - ✓ Add multi-version CVSS filtering support (cvss2_min, cvss30_min, cvss31_min)
-- [ ] Add date range filtering (published/modified)
+- ✓ Add date range filtering (published_from, published_to)
 - [ ] Add filtering by vendors, products, versions, etc.
 - [ ] Add filtering by vulnerability status (e.g., DISPUTED, REJECTED)
 

@@ -156,6 +156,17 @@ async function handleRequest(req, res) {
 
       const kev = url.searchParams.get('kev');
 
+      // Date range filtering
+      const publishedFrom = url.searchParams.get('published_from');
+      const publishedTo = url.searchParams.get('published_to');
+
+      // Validate date format (ISO date string YYYY-MM-DD)
+      const isValidDate = (dateStr) => {
+        if (!dateStr) return false;
+        const date = new Date(dateStr);
+        return !isNaN(date.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(dateStr);
+      };
+
       // Build base query to get CVEs with their JSON data
       let query = `
         SELECT c.json, count(*) OVER() as total_count
@@ -204,6 +215,16 @@ async function handleRequest(req, res) {
       // KEV filtering
       if (kev === 'true') {
         where.push("json_extract(c.json, '$.kev') = 1");
+      }
+
+      // Date range filtering
+      if (publishedFrom && isValidDate(publishedFrom)) {
+        where.push('c.published >= ?');
+        params.push(publishedFrom + 'T00:00:00.000Z');
+      }
+      if (publishedTo && isValidDate(publishedTo)) {
+        where.push('c.published <= ?');
+        params.push(publishedTo + 'T23:59:59.999Z');
       }
 
       if (where.length > 0) {
@@ -350,9 +371,76 @@ async function handleRequest(req, res) {
         endTime: r.end_time,
         status: r.status,
         itemsProcessed: r.items_processed,
+        progressPercent: r.progress_percent || 0,
+        itemsAdded: r.items_added || 0,
+        itemsUpdated: r.items_updated || 0,
+        itemsUnchanged: r.items_unchanged || 0,
+        currentPhase: r.current_phase,
+        lastHeartbeat: r.last_heartbeat,
+        totalFiles: r.total_files,
         error: r.error
       }));
       return sendJson(res, jobs);
+    }
+
+    // Cancel a job
+    const jobCancelMatch = pathname.match(/^\/api\/jobs\/(\d+)\/cancel$/);
+    if (req.method === 'POST' && jobCancelMatch) {
+      const jobId = parseInt(jobCancelMatch[1]);
+      nvd.cancelJob(jobId);
+      return sendJson(res, { status: 'Cancellation requested', jobId });
+    }
+
+    // Get job logs
+    const jobLogsMatch = pathname.match(/^\/api\/jobs\/(\d+)\/logs$/);
+    if (req.method === 'GET' && jobLogsMatch) {
+      const jobId = parseInt(jobLogsMatch[1]);
+      const logs = nvd.statements.getJobLogs.all(jobId);
+      return sendJson(res, logs.map(l => ({
+        id: l.id,
+        timestamp: l.timestamp,
+        level: l.level,
+        message: l.message,
+        metadata: l.metadata ? JSON.parse(l.metadata) : null
+      })));
+    }
+
+    // SSE log streaming
+    const jobLogsStreamMatch = pathname.match(/^\/api\/jobs\/(\d+)\/logs\/stream$/);
+    if (req.method === 'GET' && jobLogsStreamMatch) {
+      const jobId = parseInt(jobLogsStreamMatch[1]);
+      const clientId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*'
+      });
+
+      // Send existing logs first
+      const existingLogs = nvd.statements.getJobLogs.all(jobId);
+      for (const log of existingLogs) {
+        const data = {
+          id: log.id,
+          timestamp: log.timestamp,
+          level: log.level,
+          message: log.message,
+          metadata: log.metadata ? JSON.parse(log.metadata) : null
+        };
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      }
+
+      // Register for new logs
+      nvd.registerSseClient(clientId, res, jobId);
+
+      // Handle connection close
+      req.on('close', () => {
+        nvd.unregisterSseClient(clientId);
+      });
+
+      // Keep connection open - don't call sendJson or end
+      return;
     }
 
     // --- Watchlists ---
@@ -544,6 +632,41 @@ export {
   MAX_WATCHLIST_NAME_LENGTH
 };
 
+// Stuck job detector - marks jobs as failed if no heartbeat for 10+ minutes
+const STUCK_JOB_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+const STUCK_JOB_CHECK_INTERVAL_MS = 60 * 1000; // Check every minute
+
+function startStuckJobDetector() {
+  setInterval(() => {
+    try {
+      const now = Date.now();
+      const runningJobs = db.prepare(`
+        SELECT id, last_heartbeat FROM job_runs
+        WHERE status = 'RUNNING'
+      `).all();
+
+      for (const job of runningJobs) {
+        if (!job.last_heartbeat) continue;
+
+        const heartbeatTime = new Date(job.last_heartbeat).getTime();
+        if (now - heartbeatTime > STUCK_JOB_THRESHOLD_MS) {
+          const timestamp = new Date().toISOString();
+          db.prepare(`
+            UPDATE job_runs
+            SET status = 'FAILED',
+                end_time = ?,
+                error = 'Job detected as stuck (no progress for 10+ minutes)'
+            WHERE id = ?
+          `).run(timestamp, job.id);
+          console.log(`[StuckDetector] Marked job ${job.id} as stuck (last heartbeat: ${job.last_heartbeat})`);
+        }
+      }
+    } catch (err) {
+      console.error('[StuckDetector] Error checking for stuck jobs:', err);
+    }
+  }, STUCK_JOB_CHECK_INTERVAL_MS);
+}
+
 // Only start server when run directly (not imported for testing)
 // Also allow if running under PM2 (ProcessContainerFork)
 const isMainModule = import.meta.url === `file://${process.argv[1]}` || process.argv[1].includes('pm2');
@@ -553,5 +676,9 @@ if (isMainModule) {
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`Server running at http://127.0.0.1:${PORT}/`);
     console.log('Ingestion endpoint available at POST /api/ingest');
+
+    // Start the stuck job detector
+    startStuckJobDetector();
+    console.log('Stuck job detector started (checks every 60s, threshold 10min)');
   });
 }
