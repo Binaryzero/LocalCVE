@@ -107,7 +107,21 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
   - ✓ Change counts display (+added, ~updated, =unchanged)
   - ✓ Expandable log panel with real-time streaming
   - ✓ CANCELLED status badge support
-- ✓ Build verified, unit tests passing (210/213)
+- ✓ Build verified, unit tests passing (218/218)
+- ✓ Fixed duplicate export error in nvd.js (registerSseClient/unregisterSseClient)
+- ✓ Fixed getChangedFiles() to accept optional logger parameter
+- ✓ Updated Playwright config for dual-server E2E tests
+- ✓ E2E tests passing (3/3)
+- ✓ **Ingestion Reliability & Health Monitoring** (Jan 7, 2026)
+- ✓ Added server startup cleanup for orphaned RUNNING jobs
+- ✓ Added `/api/health` endpoint for dataset completeness monitoring:
+  - ✓ Shows CVE count vs repo file count
+  - ✓ Calculates completeness percentage
+  - ✓ Shows last commit hash from system_metadata
+  - ✓ Shows last job status and any running job
+- ✓ Cleaned up 90 orphaned RUNNING jobs from database
+- ✓ Database currently 67% complete (217,825 / 326,434 CVEs)
+- ✓ All tests passing (218 unit, 3 E2E)
 - ✓ **Phase 1 UI Enhancements** (Jan 6, 2026)
 - ✓ Multi-Version CVSS Display:
   - ✓ Created CvssVersionTabs component with tabbed interface
@@ -130,6 +144,32 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
   - ✓ 600px max height with virtualized rows
   - ✓ 72px estimated row height with 5 item overscan
 - ✓ 218 unit tests passing, build verified
+- ✓ **Phase 2 UI Enhancements** (Jan 6, 2026)
+- ✓ Alert Management - Bulk Actions:
+  - ✓ Checkbox column for individual alert selection
+  - ✓ Select All / Deselect All in header
+  - ✓ Selection toolbar with "Mark Selected Read" and "Delete Selected"
+  - ✓ Three-state checkbox indicator (none/some/all)
+- ✓ Alert Management - Grouping:
+  - ✓ Group by Watchlist toggle
+  - ✓ Group by Date toggle
+  - ✓ Collapsible group sections with count badges
+  - ✓ Unread count per group
+- ✓ Alert Management - Export:
+  - ✓ CSV export with CVE ID, Watchlist, Type, Date, Read columns
+  - ✓ JSON export with full alert objects
+  - ✓ Dropdown menu for format selection
+- ✓ Watchlist Query Visualization:
+  - ✓ Created QueryVisualizer component
+  - ✓ Color-coded filter chips for each condition
+  - ✓ Clickable chips to apply filter to CVE search
+  - ✓ Human-readable query summary
+- ✓ Severity Matrix Filter:
+  - ✓ 4x3 grid (Critical/High/Medium/Low x CVSS 3.1/3.0/2.0)
+  - ✓ Click cells for individual selection
+  - ✓ Row/column header click for bulk selection
+  - ✓ Selection counter badge
+- ✓ 218 unit tests passing, build at 636KB
 
 ## Critical Missing Features
 

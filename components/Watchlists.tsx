@@ -1,15 +1,24 @@
 import React from 'react';
-import { Eye, Trash2, Plus, ToggleLeft, ToggleRight, Target } from 'lucide-react';
-import { Watchlist } from '../types';
+import { Eye, Trash2, Plus, ToggleLeft, ToggleRight, Target, ExternalLink } from 'lucide-react';
+import { Watchlist, QueryModel } from '../types';
+import QueryVisualizer from './QueryVisualizer';
 
 interface WatchlistsProps {
   watchlists: Watchlist[];
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   onNavigate: (page: string) => void;
+  onApplyFilter?: (filter: QueryModel) => void;
 }
 
-const Watchlists: React.FC<WatchlistsProps> = ({ watchlists, onToggle, onDelete, onNavigate }) => {
+const Watchlists: React.FC<WatchlistsProps> = ({ watchlists, onToggle, onDelete, onNavigate, onApplyFilter }) => {
+
+  const handleChipClick = (filter: Partial<QueryModel>) => {
+    if (onApplyFilter) {
+      onApplyFilter(filter as QueryModel);
+      onNavigate('cves');
+    }
+  };
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -82,17 +91,32 @@ const Watchlists: React.FC<WatchlistsProps> = ({ watchlists, onToggle, onDelete,
 
                 {/* Query */}
                 <div>
-                  <label className="text-xs font-semibold text-gray-500 mono uppercase mb-2 block">
-                    Query
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-gray-500 mono uppercase">
+                      Query
+                    </label>
+                    {onApplyFilter && (
+                      <button
+                        onClick={() => { onApplyFilter(wl.query); onNavigate('cves'); }}
+                        className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mono transition-colors"
+                        title="Apply this filter to CVE search"
+                      >
+                        <ExternalLink className="h-3 w-3" strokeWidth={1.5} />
+                        SEARCH
+                      </button>
+                    )}
+                  </div>
                   <div
-                    className="p-3 rounded-lg border text-xs overflow-x-auto max-h-24"
+                    className="p-3 rounded-lg border"
                     style={{
                       background: 'rgba(6, 182, 212, 0.03)',
                       borderColor: 'var(--cyber-border)'
                     }}
                   >
-                    <pre className="text-gray-400 mono">{JSON.stringify(wl.query, null, 2)}</pre>
+                    <QueryVisualizer
+                      query={wl.query}
+                      onChipClick={onApplyFilter ? handleChipClick : undefined}
+                    />
                   </div>
                 </div>
 

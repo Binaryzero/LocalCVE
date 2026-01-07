@@ -1,8 +1,9 @@
-import React, { useState, useRef } from 'react';
-import { Search, Filter, Save, ExternalLink, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { useState, useRef, useMemo } from 'react';
+import { Search, Filter, Save, ExternalLink, X, ChevronLeft, ChevronRight, Grid3X3 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Cve, QueryModel } from '../types';
 import FilterPresets from './FilterPresets';
+import SeverityMatrix, { SeverityMatrixSelection, matrixToQueryParams } from './SeverityMatrix';
 
 interface CveListProps {
   cves: Cve[];
@@ -28,6 +29,8 @@ const CveList: React.FC<CveListProps> = ({
   onSelectCve
 }) => {
   const [showFilters, setShowFilters] = useState(false);
+  const [showMatrix, setShowMatrix] = useState(false);
+  const [matrixSelection, setMatrixSelection] = useState<SeverityMatrixSelection>({ selected: new Set() });
   const parentRef = useRef<HTMLDivElement>(null);
 
   // Virtual scrolling setup - renders only visible rows for better performance
@@ -40,6 +43,24 @@ const CveList: React.FC<CveListProps> = ({
 
   const handleInputChange = (field: keyof QueryModel, value: any) => {
     onFilterChange({ ...filters, [field]: value });
+    onPageChange(0);
+  };
+
+  // Handle matrix selection changes
+  const handleMatrixChange = (selection: SeverityMatrixSelection) => {
+    setMatrixSelection(selection);
+    // Convert matrix selection to query params and apply
+    const params = matrixToQueryParams(selection);
+    const newFilters = { ...filters };
+    // Clear previous version-specific CVSS mins
+    delete newFilters.cvss2_min;
+    delete newFilters.cvss30_min;
+    delete newFilters.cvss31_min;
+    // Apply new ones from matrix
+    if (params.cvss2_min) newFilters.cvss2_min = parseFloat(params.cvss2_min);
+    if (params.cvss30_min) newFilters.cvss30_min = parseFloat(params.cvss30_min);
+    if (params.cvss31_min) newFilters.cvss31_min = parseFloat(params.cvss31_min);
+    onFilterChange(newFilters);
     onPageChange(0);
   };
 
@@ -144,6 +165,25 @@ const CveList: React.FC<CveListProps> = ({
             <Filter className="h-4 w-4 mr-2" strokeWidth={1.5} />
             FILTERS
             {showFilters && <X className="h-4 w-4 ml-2" strokeWidth={1.5} />}
+          </button>
+          <button
+            onClick={() => setShowMatrix(!showMatrix)}
+            className={`flex items-center justify-center px-5 py-3 border rounded-lg mono text-sm font-medium transition-all ${
+              showMatrix
+                ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
+                : matrixSelection.selected.size > 0
+                ? 'border-cyan-500/50 text-cyan-400/70 hover:border-cyan-500'
+                : 'border-gray-700 text-gray-400 hover:border-gray-600'
+            }`}
+            title="Severity Matrix Filter"
+          >
+            <Grid3X3 className="h-4 w-4 mr-2" strokeWidth={1.5} />
+            MATRIX
+            {matrixSelection.selected.size > 0 && (
+              <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-cyan-500/30 text-cyan-400">
+                {matrixSelection.selected.size}
+              </span>
+            )}
           </button>
         </div>
 
@@ -289,6 +329,22 @@ const CveList: React.FC<CveListProps> = ({
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Severity Matrix Panel */}
+        {showMatrix && (
+          <div className="mt-4 p-4 rounded-lg border" style={{
+            background: 'rgba(6, 182, 212, 0.03)',
+            borderColor: 'var(--cyber-border)'
+          }}>
+            <SeverityMatrix
+              selection={matrixSelection}
+              onChange={handleMatrixChange}
+            />
+            <p className="mt-3 text-xs text-gray-600 mono">
+              Click cells to filter by severity and CVSS version. Click row/column headers to select entire rows or columns.
+            </p>
           </div>
         )}
       </div>

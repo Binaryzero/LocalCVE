@@ -199,6 +199,13 @@ const App: React.FC = () => {
             endTime: null,
             status: 'RUNNING',
             itemsProcessed: 0,
+            progressPercent: 0,
+            itemsAdded: 0,
+            itemsUpdated: 0,
+            itemsUnchanged: 0,
+            currentPhase: 'Starting',
+            lastHeartbeat: new Date().toISOString(),
+            totalFiles: null,
             error: null
           };
           setJobs(prev => [newJob, ...prev]);
@@ -235,7 +242,7 @@ const App: React.FC = () => {
           />
         );
       case 'watchlists':
-        return <Watchlists watchlists={watchlists} onToggle={handleToggleWatchlist} onDelete={handleDeleteWatchlist} onNavigate={setActivePage} />;
+        return <Watchlists watchlists={watchlists} onToggle={handleToggleWatchlist} onDelete={handleDeleteWatchlist} onNavigate={setActivePage} onApplyFilter={(filter) => { setFilters(filter); setPage(0); }} />;
       case 'jobs':
         return <Jobs jobs={jobs} onRunIngest={handleRunIngest} />;
       case 'alerts':
