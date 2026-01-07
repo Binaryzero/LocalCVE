@@ -1,6 +1,16 @@
 import db from '../../src/lib/db.js';
 
 describe('Database Module', () => {
+    // Clean up test watchlists and alerts after all tests
+    afterAll(() => {
+        try {
+            db.prepare("DELETE FROM alerts WHERE watchlist_name IN ('Test Watchlist', 'Alert Test')").run();
+            db.prepare("DELETE FROM watchlists WHERE name IN ('Test Watchlist', 'Alert Test')").run();
+        } catch (e) {
+            // Ignore cleanup errors
+        }
+    });
+
     describe('Connection', () => {
         test('DB connection should be valid and return CVE count', () => {
             const row = db.prepare('SELECT count(*) as cnt FROM cves').get();

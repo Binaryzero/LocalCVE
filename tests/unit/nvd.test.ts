@@ -16,6 +16,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
+// Global cleanup for all NVD test watchlists - runs after all tests in this file
+afterAll(() => {
+    try {
+        // Clean up all test watchlists created by NVD tests
+        db.prepare(`DELETE FROM alerts WHERE watchlist_name LIKE '%Test%' OR watchlist_name LIKE 'BatchTest%' OR watchlist_name LIKE 'RefreshTest%' OR watchlist_name LIKE 'StmtTest%' OR watchlist_name LIKE 'Ingest Test%' OR watchlist_name LIKE 'Alert Gen%'`).run();
+        db.prepare(`DELETE FROM watchlists WHERE name LIKE '%Test%' OR name LIKE 'BatchTest%' OR name LIKE 'RefreshTest%' OR name LIKE 'StmtTest%' OR name LIKE 'Ingest Test%' OR name LIKE 'Alert Gen%' OR name LIKE 'Updated Name'`).run();
+        // Clean up test CVEs
+        db.prepare(`DELETE FROM cve_references WHERE cve_id LIKE 'CVE-BATCH-TEST%'`).run();
+        db.prepare(`DELETE FROM configs WHERE cve_id LIKE 'CVE-BATCH-TEST%'`).run();
+        db.prepare(`DELETE FROM metrics WHERE cve_id LIKE 'CVE-BATCH-TEST%'`).run();
+        db.prepare(`DELETE FROM cves_fts WHERE id LIKE 'CVE-BATCH-TEST%'`).run();
+        db.prepare(`DELETE FROM cve_changes WHERE cve_id LIKE 'CVE-BATCH-TEST%'`).run();
+        db.prepare(`DELETE FROM cves WHERE id LIKE 'CVE-BATCH-TEST%'`).run();
+    } catch (e) {
+        // Ignore cleanup errors
+    }
+});
+
 describe('CVE Normalization', () => {
     // Helper to create mock CVE JSON 5.0 data
     const createMockCve = (overrides = {}) => ({
