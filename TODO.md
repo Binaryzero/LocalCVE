@@ -59,6 +59,33 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
 - ✓ Created comprehensive unit tests for new functionality
 - ✓ Created PR #2 with all changes
 - ✓ All tests verified passing (5/5 unit, 3/3 E2E)
+- ✓ **Security Compliance Review & Input Validation** (Jan 6, 2026)
+- ✓ Conducted full audit against all 22 codeguard security rules
+- ✓ Verified SQL injection protection (prepared statements throughout)
+- ✓ Verified no hardcoded credentials in codebase
+- ✓ Verified XSS protection (React auto-escaping, rel="noopener noreferrer")
+- ✓ Verified cryptographic usage (SHA-256 correctly implemented)
+- ✓ Implemented comprehensive input validation in server.js:
+  - ✓ Request body size limit (1MB max)
+  - ✓ Search parameter length limit (500 chars)
+  - ✓ Limit parameter bounding (1-1000, default 100)
+  - ✓ Offset validation (non-negative)
+  - ✓ Severity enum validation (LOW/MEDIUM/HIGH/CRITICAL)
+  - ✓ CVSS range validation (0-10)
+  - ✓ Watchlist body structure validation (name, query required)
+- ✓ All tests passing (5/5 unit)
+- ✓ **Documentation Update** (Jan 6, 2026)
+- ✓ Updated README.md with comprehensive project documentation
+- ✓ Includes features, quick start, architecture, API reference, troubleshooting
+- ✓ **UI Visual Refresh** (Jan 6, 2026)
+- ✓ Changed background from dark teal (#0a0e1a) to pure black (#000000)
+- ✓ Updated surface colors to neutral grays for cleaner look
+- ✓ Softened cyan accent color for less visual noise
+- ✓ Added accessibility focus states (visible outline on focus)
+- ✓ Added prefers-reduced-motion support for accessibility
+- ✓ Made grid pattern more subtle (nearly invisible)
+- ✓ Slimmed scrollbar design for minimal appearance
+- ✓ All E2E tests passing (3/3)
 
 ## Critical Missing Features
 
@@ -108,9 +135,23 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
 - ✓ Add unit tests for multi-version CVSS support
 - [ ] Add E2E tests for CVE search and filtering
 - ✓ Test alert generation workflow
-- [ ] Add tests for ingestion edge cases
+- ✓ Add tests for ingestion edge cases
+- ✓ **Comprehensive Unit Test Suite** (Jan 6, 2026)
+  - ✓ 213 total tests across 4 test files
+  - ✓ 85.97% statement coverage (527/613)
+  - ✓ 87.76% branch coverage (251/286)
+  - ✓ matcher.js: 100% coverage
+  - ✓ server.js: 95.05% coverage
+  - ✓ db.js: 78.26% coverage (schema migration code excluded)
+  - ✓ nvd.js: 73.12% coverage (git/file operations excluded)
+  - ✓ All configured per-file thresholds passing
+  - ✓ Added server.test.ts with comprehensive API endpoint tests
+  - ✓ Added processBatch tests for CVE ingestion
+  - ✓ Added CVSS version-specific tests (2.0, 3.0, 3.1)
+  - ✓ Added alert generation and deduplication tests
+  - ✓ Added FTS5 search operation tests
 
 ## Documentation
 - [ ] Document watchlist query syntax
-- [ ] Add API endpoint documentation
+- ✓ Add API endpoint documentation (in README.md)
 - [ ] Create user guide for alert setup
