@@ -78,6 +78,9 @@ export interface QueryModel {
   cvss31_max?: number;
   kev?: boolean;
   epss_min?: number;
+  // Vendor/product filtering
+  vendors?: string[];
+  products?: string[];
 }
 
 export interface FilterPreset {

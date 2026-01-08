@@ -12,7 +12,12 @@ export function matchesQuery(cve, query) {
         const searchText = query.text.toLowerCase();
         const inId = cve.id ? cve.id.toLowerCase().includes(searchText) : false;
         const inDesc = cve.description ? cve.description.toLowerCase().includes(searchText) : false;
-        const inRefs = (cve.references || []).some(r => r ? r.toLowerCase().includes(searchText) : false);
+        // Handle both old format (string[]) and new format ({url, tags}[])
+        const inRefs = (cve.references || []).some(r => {
+            if (!r) return false;
+            const url = typeof r === 'string' ? r : r.url;
+            return url ? url.toLowerCase().includes(searchText) : false;
+        });
 
         if (!inId && !inDesc && !inRefs) return false;
     }

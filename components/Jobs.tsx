@@ -5,6 +5,7 @@ import { JobRun, JobLog } from '../types';
 interface JobsProps {
   jobs: JobRun[];
   onRunIngest: () => void;
+  onRunBulkIngest?: () => void;
 }
 
 interface StatusConfig {
@@ -16,7 +17,7 @@ interface StatusConfig {
   animate?: boolean;
 }
 
-const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest }) => {
+const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest, onRunBulkIngest }) => {
   const isRunning = jobs.length > 0 && jobs[0].status === 'RUNNING';
   const [expandedJob, setExpandedJob] = useState<number | null>(null);
   const [jobLogs, setJobLogs] = useState<Map<number, JobLog[]>>(new Map());
@@ -155,25 +156,49 @@ const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest }) => {
           <h1 className="text-3xl font-bold text-gray-100 mono tracking-tight">INGESTION CONTROL</h1>
           <p className="text-sm text-gray-500 mono mt-1">CVE data synchronization jobs</p>
         </div>
-        <button
-          onClick={onRunIngest}
-          disabled={isRunning}
-          className={`inline-flex items-center px-5 py-3 rounded-lg border transition-all ${
-            isRunning
-              ? 'opacity-50 cursor-not-allowed'
-              : 'hover:border-cyan-500'
-          }`}
-          style={{
-            background: isRunning ? 'rgba(6, 182, 212, 0.05)' : 'rgba(6, 182, 212, 0.1)',
-            borderColor: 'var(--cyber-accent)',
-            color: 'var(--cyber-accent)'
-          }}
-        >
-          <Terminal className={`h-4 w-4 mr-2 ${isRunning ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
-          <span className="mono text-sm font-medium">
-            {isRunning ? 'INGESTING...' : 'RUN INGESTION'}
-          </span>
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onRunIngest}
+            disabled={isRunning}
+            className={`inline-flex items-center px-5 py-3 rounded-lg border transition-all ${
+              isRunning
+                ? 'opacity-50 cursor-not-allowed'
+                : 'hover:border-cyan-500'
+            }`}
+            style={{
+              background: isRunning ? 'rgba(6, 182, 212, 0.05)' : 'rgba(6, 182, 212, 0.1)',
+              borderColor: 'var(--cyber-accent)',
+              color: 'var(--cyber-accent)'
+            }}
+          >
+            <Terminal className={`h-4 w-4 mr-2 ${isRunning ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
+            <span className="mono text-sm font-medium">
+              {isRunning ? 'INGESTING...' : 'RUN INGESTION'}
+            </span>
+          </button>
+          {onRunBulkIngest && (
+            <button
+              onClick={onRunBulkIngest}
+              disabled={isRunning}
+              title="Fast mode: skips per-row FTS updates, alerts, and change tracking. Rebuilds search index at end."
+              className={`inline-flex items-center px-5 py-3 rounded-lg border transition-all ${
+                isRunning
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:border-emerald-500'
+              }`}
+              style={{
+                background: isRunning ? 'rgba(16, 185, 129, 0.05)' : 'rgba(16, 185, 129, 0.1)',
+                borderColor: 'rgb(16, 185, 129)',
+                color: 'rgb(16, 185, 129)'
+              }}
+            >
+              <RefreshCcw className={`h-4 w-4 mr-2 ${isRunning ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
+              <span className="mono text-sm font-medium">
+                {isRunning ? 'INGESTING...' : 'BULK (FAST)'}
+              </span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Jobs Table */}

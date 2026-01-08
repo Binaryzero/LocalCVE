@@ -17,9 +17,17 @@ export default defineConfig({
             use: { ...devices['Desktop Chrome'] },
         },
     ],
-    webServer: {
-        command: 'npm run dev',
-        url: 'http://127.0.0.1:3000',
-        reuseExistingServer: true,
-    },
+    webServer: [
+        {
+            command: 'node src/server.js',
+            url: 'http://127.0.0.1:17920/api/jobs',
+            reuseExistingServer: true,
+            timeout: 30000,
+        },
+        {
+            command: 'npm run dev',
+            url: 'http://127.0.0.1:3000',
+            reuseExistingServer: true,
+        },
+    ],
 });

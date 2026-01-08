@@ -1,9 +1,10 @@
 import React, { useState, useRef, useMemo } from 'react';
-import { Search, Filter, Save, ExternalLink, X, ChevronLeft, ChevronRight, Grid3X3 } from 'lucide-react';
+import { Search, Filter, Save, ExternalLink, X, ChevronLeft, ChevronRight, Grid3X3, Eye, ChevronDown } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Cve, QueryModel } from '../types';
+import { Cve, QueryModel, Watchlist } from '../types';
 import FilterPresets from './FilterPresets';
 import SeverityMatrix, { SeverityMatrixSelection, matrixToQueryParams } from './SeverityMatrix';
+import VendorProductFilter from './VendorProductFilter';
 
 interface CveListProps {
   cves: Cve[];
@@ -15,6 +16,7 @@ interface CveListProps {
   totalCount: number;
   pageSize: number;
   onSelectCve: (id: string) => void;
+  watchlists?: Watchlist[];
 }
 
 const CveList: React.FC<CveListProps> = ({
@@ -26,12 +28,42 @@ const CveList: React.FC<CveListProps> = ({
   onPageChange,
   totalCount,
   pageSize,
-  onSelectCve
+  onSelectCve,
+  watchlists = []
 }) => {
   const [showFilters, setShowFilters] = useState(false);
   const [showMatrix, setShowMatrix] = useState(false);
   const [matrixSelection, setMatrixSelection] = useState<SeverityMatrixSelection>({ selected: new Set() });
+  const [showWatchlistDropdown, setShowWatchlistDropdown] = useState(false);
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState<string | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowWatchlistDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectedWatchlist = watchlists.find(w => w.id === selectedWatchlistId);
+
+  const handleSelectWatchlist = (watchlist: Watchlist | null) => {
+    if (watchlist) {
+      setSelectedWatchlistId(watchlist.id);
+      onFilterChange(watchlist.query);
+      onPageChange(0);
+    } else {
+      setSelectedWatchlistId(null);
+      onFilterChange({ text: '', cvss_min: 0, cvss_max: 10 });
+      onPageChange(0);
+    }
+    setShowWatchlistDropdown(false);
+  };
 
   // Virtual scrolling setup - renders only visible rows for better performance
   const rowVirtualizer = useVirtualizer({
@@ -87,7 +119,7 @@ const CveList: React.FC<CveListProps> = ({
     );
   };
 
-  const hasActiveSearch = filters.text?.trim() || filters.cvss_min > 0 || filters.kev || filters.published_from || filters.published_to;
+  const hasActiveSearch = filters.text?.trim() || filters.cvss_min > 0 || filters.kev || filters.published_from || filters.published_to || (filters.vendors && filters.vendors.length > 0) || (filters.products && filters.products.length > 0);
 
   return (
     <div className="space-y-6">
@@ -154,6 +186,69 @@ const CveList: React.FC<CveListProps> = ({
               onChange={(e) => handleInputChange('text', e.target.value)}
             />
           </div>
+
+          {/* Watchlist Dropdown */}
+          {watchlists.length > 0 && (
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setShowWatchlistDropdown(!showWatchlistDropdown)}
+                className={`flex items-center justify-between px-4 py-3 border rounded-lg mono text-sm font-medium transition-all min-w-[180px] ${
+                  selectedWatchlist
+                    ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
+                    : 'border-gray-700 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                <div className="flex items-center">
+                  <Eye className="h-4 w-4 mr-2" strokeWidth={1.5} />
+                  <span className="truncate max-w-[120px]">
+                    {selectedWatchlist ? selectedWatchlist.name : 'WATCHLIST'}
+                  </span>
+                </div>
+                <ChevronDown className={`h-4 w-4 ml-2 transition-transform ${showWatchlistDropdown ? 'rotate-180' : ''}`} strokeWidth={1.5} />
+              </button>
+
+              {showWatchlistDropdown && (
+                <div
+                  className="absolute top-full left-0 mt-1 w-full min-w-[220px] rounded-lg border overflow-hidden z-50"
+                  style={{
+                    background: 'var(--cyber-surface)',
+                    borderColor: 'var(--cyber-border)'
+                  }}
+                >
+                  {/* Clear Selection Option */}
+                  <button
+                    onClick={() => handleSelectWatchlist(null)}
+                    className={`w-full px-4 py-2.5 text-left text-sm mono transition-all hover:bg-cyan-500/10 ${
+                      !selectedWatchlist ? 'text-gray-500' : 'text-gray-400'
+                    }`}
+                  >
+                    ALL CVEs
+                  </button>
+                  <div className="border-t" style={{ borderColor: 'var(--cyber-border)' }} />
+                  {/* Watchlist Options */}
+                  {watchlists.map(wl => (
+                    <button
+                      key={wl.id}
+                      onClick={() => handleSelectWatchlist(wl)}
+                      className={`w-full px-4 py-2.5 text-left text-sm mono transition-all hover:bg-cyan-500/10 flex items-center justify-between ${
+                        selectedWatchlistId === wl.id
+                          ? 'bg-cyan-500/10 text-cyan-400'
+                          : 'text-gray-300'
+                      }`}
+                    >
+                      <span className="truncate">{wl.name}</span>
+                      {wl.matchCount > 0 && (
+                        <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-gray-700 text-gray-400">
+                          {wl.matchCount}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             onClick={() => setShowFilters(!showFilters)}
             className={`flex items-center justify-center px-5 py-3 border rounded-lg mono text-sm font-medium transition-all ${
@@ -328,6 +423,22 @@ const CveList: React.FC<CveListProps> = ({
                   </button>
                 )}
               </div>
+            </div>
+
+            {/* Row 3: Vendor/Product Filter */}
+            <div className="pt-3 border-t" style={{ borderColor: 'var(--cyber-border)' }}>
+              <VendorProductFilter
+                selectedVendors={filters.vendors || []}
+                selectedProducts={filters.products || []}
+                onVendorsChange={(vendors) => {
+                  onFilterChange({ ...filters, vendors: vendors.length > 0 ? vendors : undefined });
+                  onPageChange(0);
+                }}
+                onProductsChange={(products) => {
+                  onFilterChange({ ...filters, products: products.length > 0 ? products : undefined });
+                  onPageChange(0);
+                }}
+              />
             </div>
           </div>
         )}

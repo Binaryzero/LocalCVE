@@ -543,7 +543,7 @@ const AlertRow: React.FC<AlertRowProps> = ({
               </span>
             </div>
             <p className="text-sm text-gray-300 font-medium mb-2">
-              {alert.type === 'NEW_MATCH' ? 'New vulnerability detected' : 'Vulnerability updated'}
+              {alert.type === 'NEW_MATCH' ? 'New CVE match' : 'CVE data updated'}
             </p>
             <div className="flex items-center text-xs text-gray-500 mono">
               <Calendar className="mr-1.5 h-3.5 w-3.5 text-gray-600" strokeWidth={1.5} />

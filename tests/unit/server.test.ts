@@ -77,10 +77,10 @@ class MockRequest extends EventEmitter {
 
 describe('Server Helper Functions', () => {
     // Global cleanup for all test watchlists and alerts created by server tests
-    afterAll(() => {
+    afterAll(async () => {
         try {
-            db.prepare("DELETE FROM alerts WHERE watchlist_name IN ('Test Watchlist', 'Updated Name')").run();
-            db.prepare("DELETE FROM watchlists WHERE name IN ('Test Watchlist', 'Updated Name')").run();
+            await db.run("DELETE FROM alerts WHERE watchlist_name IN ('Test Watchlist', 'Updated Name')");
+            await db.run("DELETE FROM watchlists WHERE name IN ('Test Watchlist', 'Updated Name')");
         } catch (e) {
             // Ignore cleanup errors
         }
@@ -293,17 +293,18 @@ describe('API Endpoints', () => {
             const hash = 'list-test-hash-001';
 
             try {
-                db.prepare(`INSERT OR REPLACE INTO cves (id, description, published, last_modified, normalized_hash, json) VALUES (?, ?, ?, ?, ?, ?)`).run(
+                await db.run(`INSERT INTO cves (id, description, published, last_modified, normalized_hash, json) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(id) DO UPDATE SET description = $2`,
                     listTestCveId, 'Test CVE for list endpoint metrics', '2099-01-01T00:00:00Z', '2099-01-02T00:00:00Z', hash, testJson
                 );
                 // Insert metrics for all three CVSS versions
-                db.prepare(`INSERT OR REPLACE INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)`).run(
+                await db.run(`DELETE FROM metrics WHERE cve_id = $1`, listTestCveId);
+                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)`,
                     listTestCveId, '3.1', 8.0, 'HIGH', 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N'
                 );
-                db.prepare(`INSERT OR REPLACE INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)`).run(
+                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)`,
                     listTestCveId, '3.0', 7.0, 'HIGH', 'CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N'
                 );
-                db.prepare(`INSERT OR REPLACE INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)`).run(
+                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)`,
                     listTestCveId, '2.0', 6.0, 'MEDIUM', 'AV:N/AC:L/Au:N/C:P/I:P/A:N'
                 );
             } catch (e) {
@@ -311,10 +312,10 @@ describe('API Endpoints', () => {
             }
         });
 
-        afterAll(() => {
+        afterAll(async () => {
             try {
-                db.prepare(`DELETE FROM metrics WHERE cve_id = ?`).run(listTestCveId);
-                db.prepare(`DELETE FROM cves WHERE id = ?`).run(listTestCveId);
+                await db.run(`DELETE FROM metrics WHERE cve_id = $1`, listTestCveId);
+                await db.run(`DELETE FROM cves WHERE id = $1`, listTestCveId);
             } catch (e) {
                 // Ignore cleanup errors
             }
@@ -334,8 +335,8 @@ describe('API Endpoints', () => {
 
         test('should return version-specific CVSS scores in list', async () => {
             // First verify our test data exists
-            const count = db.prepare(`SELECT count(*) as c FROM cves WHERE id = ?`).get(listTestCveId);
-            expect(count.c).toBeGreaterThan(0);
+            const count = await db.get(`SELECT count(*) as c FROM cves WHERE id = $1`, listTestCveId);
+            expect(Number(count?.c || 0)).toBeGreaterThan(0);
 
             // Get list without search to find our test CVE
             const req = new MockRequest('GET', `/api/cves?limit=1000`);
@@ -540,9 +541,9 @@ describe('API Endpoints', () => {
     });
 
     describe('POST /api/watchlists', () => {
-        afterEach(() => {
+        afterEach(async () => {
             try {
-                db.prepare("DELETE FROM watchlists WHERE name = 'Test Watchlist'").run();
+                await db.run("DELETE FROM watchlists WHERE name = 'Test Watchlist'");
             } catch (e) { /* ignore */ }
         });
 
@@ -577,9 +578,9 @@ describe('API Endpoints', () => {
     });
 
     describe('PUT /api/watchlists/:id', () => {
-        afterEach(() => {
+        afterEach(async () => {
             try {
-                db.prepare("DELETE FROM watchlists WHERE name IN ('Original Name', 'Updated Name')").run();
+                await db.run("DELETE FROM watchlists WHERE name IN ('Original Name', 'Updated Name')");
             } catch (e) { /* ignore */ }
         });
 
@@ -882,10 +883,11 @@ describe('API Endpoints', () => {
             };
 
             try {
-                db.prepare(`
-                    INSERT OR REPLACE INTO cves (id, description, published, last_modified, normalized_hash, json)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                `).run(
+                await db.run(`
+                    INSERT INTO cves (id, description, published, last_modified, normalized_hash, json)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT(id) DO UPDATE SET description = $2
+                `,
                     testCveId,
                     testCve.description,
                     testCve.published,
@@ -895,30 +897,31 @@ describe('API Endpoints', () => {
                 );
 
                 // Insert metrics - all three CVSS versions to cover all switch cases
-                db.prepare(`
-                    INSERT OR REPLACE INTO metrics (cve_id, cvss_version, score, severity, vector_string)
-                    VALUES (?, ?, ?, ?, ?)
-                `).run(testCveId, '3.1', 7.5, 'HIGH', 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L');
+                await db.run(`DELETE FROM metrics WHERE cve_id = $1`, testCveId);
+                await db.run(`
+                    INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string)
+                    VALUES ($1, $2, $3, $4, $5)
+                `, testCveId, '3.1', 7.5, 'HIGH', 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L');
 
-                db.prepare(`
-                    INSERT OR REPLACE INTO metrics (cve_id, cvss_version, score, severity, vector_string)
-                    VALUES (?, ?, ?, ?, ?)
-                `).run(testCveId, '3.0', 6.5, 'MEDIUM', 'CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L');
+                await db.run(`
+                    INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string)
+                    VALUES ($1, $2, $3, $4, $5)
+                `, testCveId, '3.0', 6.5, 'MEDIUM', 'CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L');
 
-                db.prepare(`
-                    INSERT OR REPLACE INTO metrics (cve_id, cvss_version, score, severity, vector_string)
-                    VALUES (?, ?, ?, ?, ?)
-                `).run(testCveId, '2.0', 5.0, 'MEDIUM', 'AV:N/AC:L/Au:N/C:N/I:P/A:N');
+                await db.run(`
+                    INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string)
+                    VALUES ($1, $2, $3, $4, $5)
+                `, testCveId, '2.0', 5.0, 'MEDIUM', 'AV:N/AC:L/Au:N/C:N/I:P/A:N');
             } catch (e) {
                 // Ignore errors if already exists
             }
         });
 
-        afterAll(() => {
+        afterAll(async () => {
             // Cleanup
             try {
-                db.prepare('DELETE FROM metrics WHERE cve_id = ?').run(testCveId);
-                db.prepare('DELETE FROM cves WHERE id = ?').run(testCveId);
+                await db.run('DELETE FROM metrics WHERE cve_id = $1', testCveId);
+                await db.run('DELETE FROM cves WHERE id = $1', testCveId);
             } catch (e) {
                 // Ignore cleanup errors
             }
@@ -938,17 +941,23 @@ describe('API Endpoints', () => {
             expect(Array.isArray(data.metrics)).toBe(true);
         });
 
-        test('should include version-specific CVSS scores', async () => {
+        test('should include metrics array with all CVSS versions', async () => {
             const req = new MockRequest('GET', `/api/cves/${testCveId}`);
             const res = new MockResponse();
 
             await handleRequest(req as any, res as any);
 
             const data = res.getJson();
-            // All three CVSS versions should be present
-            expect(data.cvss31Score).toBe(7.5);
-            expect(data.cvss30Score).toBe(6.5);
-            expect(data.cvss2Score).toBe(5.0);
+            // All three CVSS versions should be in the metrics array
+            expect(data.metrics).toHaveLength(3);
+
+            const v31 = data.metrics.find((m: any) => m.cvss_version === '3.1');
+            const v30 = data.metrics.find((m: any) => m.cvss_version === '3.0');
+            const v2 = data.metrics.find((m: any) => m.cvss_version === '2.0');
+
+            expect(v31?.score).toBe(7.5);
+            expect(v30?.score).toBe(6.5);
+            expect(v2?.score).toBe(5.0);
         });
     });
 
@@ -975,6 +984,215 @@ describe('API Endpoints', () => {
 
             // May return 404 or attempt SPA fallback depending on setup
             expect(res.ended).toBe(true);
+        });
+    });
+
+    describe('GET /api/vendors', () => {
+        test('should return vendor list', async () => {
+            const req = new MockRequest('GET', '/api/vendors');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            expect(Array.isArray(res.getJson())).toBe(true);
+        });
+
+        test('should filter vendors by query', async () => {
+            const req = new MockRequest('GET', '/api/vendors?q=micro');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            const data = res.getJson();
+            expect(Array.isArray(data)).toBe(true);
+        });
+
+        test('should respect limit parameter', async () => {
+            const req = new MockRequest('GET', '/api/vendors?limit=5');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            const data = res.getJson();
+            expect(data.length).toBeLessThanOrEqual(5);
+        });
+
+        test('should reject query longer than 100 chars', async () => {
+            const longQuery = 'a'.repeat(101);
+            const req = new MockRequest('GET', `/api/vendors?q=${longQuery}`);
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(400);
+            expect(res.getJson().error).toContain('too long');
+        });
+
+        test('should cap limit to 100', async () => {
+            const req = new MockRequest('GET', '/api/vendors?limit=500');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            const data = res.getJson();
+            expect(data.length).toBeLessThanOrEqual(100);
+        });
+    });
+
+    describe('GET /api/products', () => {
+        test('should return product list', async () => {
+            const req = new MockRequest('GET', '/api/products');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            expect(Array.isArray(res.getJson())).toBe(true);
+        });
+
+        test('should filter products by query', async () => {
+            const req = new MockRequest('GET', '/api/products?q=windows');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            const data = res.getJson();
+            expect(Array.isArray(data)).toBe(true);
+        });
+
+        test('should filter products by vendor', async () => {
+            const req = new MockRequest('GET', '/api/products?vendor=Microsoft');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            const data = res.getJson();
+            expect(Array.isArray(data)).toBe(true);
+        });
+
+        test('should reject query longer than 100 chars', async () => {
+            const longQuery = 'a'.repeat(101);
+            const req = new MockRequest('GET', `/api/products?q=${longQuery}`);
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(400);
+            expect(res.getJson().error).toContain('too long');
+        });
+
+        test('should reject vendor longer than 200 chars', async () => {
+            const longVendor = 'a'.repeat(201);
+            const req = new MockRequest('GET', `/api/products?vendor=${longVendor}`);
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(400);
+            expect(res.getJson().error).toContain('too long');
+        });
+    });
+
+    describe('GET /api/cves with vendor/product/status filters', () => {
+        test('should filter by vendor', async () => {
+            const req = new MockRequest('GET', '/api/cves?vendors=Microsoft');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            const data = res.getJson();
+            expect(data).toHaveProperty('cves');
+            expect(data).toHaveProperty('totalCount');
+        });
+
+        test('should filter by multiple vendors (OR logic)', async () => {
+            const req = new MockRequest('GET', '/api/cves?vendors=Microsoft,Apple');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+        });
+
+        test('should filter by product', async () => {
+            const req = new MockRequest('GET', '/api/cves?products=Windows');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+        });
+
+        test('should filter by status=DISPUTED', async () => {
+            const req = new MockRequest('GET', '/api/cves?status=DISPUTED');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+        });
+
+        test('should accept lowercase status', async () => {
+            const req = new MockRequest('GET', '/api/cves?status=disputed');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+        });
+
+        test('should reject too many vendors', async () => {
+            const manyVendors = Array(51).fill('vendor').join(',');
+            const req = new MockRequest('GET', `/api/cves?vendors=${manyVendors}`);
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(400);
+            expect(res.getJson().error).toContain('Too many vendors');
+        });
+
+        test('should reject too many products', async () => {
+            const manyProducts = Array(51).fill('product').join(',');
+            const req = new MockRequest('GET', `/api/cves?products=${manyProducts}`);
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(400);
+            expect(res.getJson().error).toContain('Too many products');
+        });
+
+        test('should combine vendor and product filters', async () => {
+            const req = new MockRequest('GET', '/api/cves?vendors=Microsoft&products=Windows');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+        });
+    });
+
+    describe('GET /api/health', () => {
+        test('should return health status', async () => {
+            const req = new MockRequest('GET', '/api/health');
+            const res = new MockResponse();
+
+            await handleRequest(req as any, res as any);
+
+            expect(res.statusCode).toBe(200);
+            const data = res.getJson();
+            expect(data).toHaveProperty('database');
+            expect(data).toHaveProperty('tracking');
+            expect(data).toHaveProperty('ingestion');
+            expect(data).toHaveProperty('status');
         });
     });
 });

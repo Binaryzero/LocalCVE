@@ -13,8 +13,8 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@duckdb/node-api": "^1.4.3-r.3",
     "@tanstack/react-virtual": "^3.13.17",
-    "better-sqlite3": "^11.8.1",
     "lucide-react": "^0.562.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

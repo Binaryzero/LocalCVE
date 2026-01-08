@@ -42,9 +42,17 @@ const App: React.FC = () => {
     try {
       const q = new URLSearchParams();
       if (filters.text) q.set('search', filters.text);
-      if (filters.cvss_min) q.set('cvss_min', filters.cvss_min.toString());
+      // Use explicit null/undefined check - 0 is a valid CVSS score
+      if (filters.cvss_min !== undefined && filters.cvss_min !== null) {
+        q.set('cvss_min', filters.cvss_min.toString());
+      }
       if (filters.published_from) q.set('published_from', filters.published_from);
       if (filters.published_to) q.set('published_to', filters.published_to);
+      // Vendor/product filters
+      if (filters.vendors && filters.vendors.length > 0) q.set('vendors', filters.vendors.join(','));
+      if (filters.products && filters.products.length > 0) q.set('products', filters.products.join(','));
+      // KEV filter
+      if (filters.kev) q.set('kev', 'true');
       q.set('limit', pageSize.toString());
       q.set('offset', (page * pageSize).toString());
 
@@ -148,6 +156,29 @@ const App: React.FC = () => {
     }
   };
 
+  const handleUpdateWatchlist = async (id: string, updates: { name?: string; query?: QueryModel }) => {
+    const watchlist = watchlists.find(w => w.id === id);
+    if (!watchlist) return;
+
+    try {
+      const updated = {
+        ...watchlist,
+        ...(updates.name !== undefined && { name: updates.name }),
+        ...(updates.query !== undefined && { query: updates.query })
+      };
+      await fetch(`/api/watchlists/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated)
+      });
+      // Optimistic update
+      setWatchlists(prev => prev.map(w => w.id === id ? { ...w, ...updates } : w));
+    } catch (err) {
+      console.error("Failed to update watchlist", err);
+      fetchData(); // Refetch on error to restore correct state
+    }
+  };
+
   // --- Alert Logic ---
   const handleMarkAlertRead = async (id: string) => {
     try {
@@ -186,9 +217,10 @@ const App: React.FC = () => {
   };
 
   // --- Ingestion Logic ---
-  const handleRunIngest = async () => {
+  const handleRunIngest = async (useBulkMode = false) => {
+    const endpoint = useBulkMode ? '/api/ingest/bulk' : '/api/ingest';
     try {
-      const response = await fetch('/api/ingest', { method: 'POST' });
+      const response = await fetch(endpoint, { method: 'POST' });
       if (response.ok) {
         const data = await response.json();
         // Optimistically add the new job to state so UI updates instantly
@@ -203,7 +235,7 @@ const App: React.FC = () => {
             itemsAdded: 0,
             itemsUpdated: 0,
             itemsUnchanged: 0,
-            currentPhase: 'Starting',
+            currentPhase: useBulkMode ? 'Starting (Bulk Mode)' : 'Starting',
             lastHeartbeat: new Date().toISOString(),
             totalFiles: null,
             error: null
@@ -220,6 +252,8 @@ const App: React.FC = () => {
     }
   };
 
+  const handleRunBulkIngest = () => handleRunIngest(true);
+
   const renderContent = () => {
     if (loading && cves.length === 0 && jobs.length === 0) {
       return <div className="p-8 text-center text-gray-500">Loading data...</div>;
@@ -227,7 +261,7 @@ const App: React.FC = () => {
 
     switch (activePage) {
       case 'cves':
-        if (selectedCveId) return <CveDetail id={selectedCveId} onBack={() => setSelectedCveId(null)} />;
+        if (selectedCveId) return <CveDetail id={selectedCveId} onBack={() => setSelectedCveId(null)} onApplyFilter={(filter) => { setFilters({ ...filters, ...filter }); setSelectedCveId(null); setPage(0); }} />;
         return (
           <CveList
             cves={cves}
@@ -239,16 +273,17 @@ const App: React.FC = () => {
             totalCount={totalCves}
             pageSize={pageSize}
             onSelectCve={setSelectedCveId}
+            watchlists={watchlists}
           />
         );
       case 'watchlists':
-        return <Watchlists watchlists={watchlists} onToggle={handleToggleWatchlist} onDelete={handleDeleteWatchlist} onNavigate={setActivePage} onApplyFilter={(filter) => { setFilters(filter); setPage(0); }} />;
+        return <Watchlists watchlists={watchlists} onToggle={handleToggleWatchlist} onDelete={handleDeleteWatchlist} onUpdate={handleUpdateWatchlist} onNavigate={setActivePage} onApplyFilter={(filter) => { setFilters(filter); setPage(0); }} />;
       case 'jobs':
-        return <Jobs jobs={jobs} onRunIngest={handleRunIngest} />;
+        return <Jobs jobs={jobs} onRunIngest={() => handleRunIngest(false)} onRunBulkIngest={handleRunBulkIngest} />;
       case 'alerts':
         return <Alerts alerts={alerts} onMarkRead={handleMarkAlertRead} onDelete={handleDeleteAlert} onMarkAllRead={handleMarkAllAlertsRead} onDeleteAll={handleDeleteAllAlerts} onViewCve={viewCve} />;
       default:
-        if (selectedCveId) return <CveDetail id={selectedCveId} onBack={() => setSelectedCveId(null)} />;
+        if (selectedCveId) return <CveDetail id={selectedCveId} onBack={() => setSelectedCveId(null)} onApplyFilter={(filter) => { setFilters({ ...filters, ...filter }); setSelectedCveId(null); setPage(0); }} />;
         return (
           <CveList
             cves={cves}
@@ -260,6 +295,7 @@ const App: React.FC = () => {
             totalCount={totalCves}
             pageSize={pageSize}
             onSelectCve={setSelectedCveId}
+            watchlists={watchlists}
           />
         );
     }

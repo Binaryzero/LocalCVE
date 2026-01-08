@@ -80,6 +80,39 @@ describe('Matcher Logic', () => {
             const cve = createCve({ references: [null, 'https://example.com'] });
             expect(matchesQuery(cve, { text: 'example.com' })).toBe(true);
         });
+
+        test('should handle new reference format with url and tags', () => {
+            const cve = createCve({
+                references: [
+                    { url: 'https://vendor.com/advisory', tags: ['vendor-advisory'] },
+                    { url: 'https://nvd.nist.gov/vuln/detail/CVE-2022-0001', tags: [] }
+                ]
+            });
+            expect(matchesQuery(cve, { text: 'vendor.com' })).toBe(true);
+            expect(matchesQuery(cve, { text: 'nvd.nist' })).toBe(true);
+            expect(matchesQuery(cve, { text: 'nonexistent' })).toBe(false);
+        });
+
+        test('should handle mixed reference formats', () => {
+            const cve = createCve({
+                references: [
+                    'https://old-format.com/ref',
+                    { url: 'https://new-format.com/ref', tags: ['patch'] }
+                ]
+            });
+            expect(matchesQuery(cve, { text: 'old-format' })).toBe(true);
+            expect(matchesQuery(cve, { text: 'new-format' })).toBe(true);
+        });
+
+        test('should handle reference object with null url', () => {
+            const cve = createCve({
+                references: [
+                    { url: null, tags: ['patch'] },
+                    { url: 'https://valid.com', tags: [] }
+                ]
+            });
+            expect(matchesQuery(cve, { text: 'valid.com' })).toBe(true);
+        });
     });
 
     describe('Date range filtering', () => {

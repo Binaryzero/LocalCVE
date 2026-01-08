@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from 'recharts';
-import { Shield, AlertTriangle, Info } from 'lucide-react';
+import { Shield, AlertTriangle, Info, Zap, Target } from 'lucide-react';
 
 interface CvssMetric {
   cvss_version: string;
@@ -9,14 +9,17 @@ interface CvssMetric {
   vector_string: string | null;
 }
 
+interface SsvcData {
+  exploitation: string;
+  automatable: string;
+  technical_impact: string;
+  provider: string;
+}
+
 interface CvssVersionTabsProps {
   metrics: CvssMetric[];
-  cvss2Score?: number | null;
-  cvss2Severity?: string | null;
-  cvss30Score?: number | null;
-  cvss30Severity?: string | null;
-  cvss31Score?: number | null;
-  cvss31Severity?: string | null;
+  kev?: boolean;
+  ssvc?: SsvcData[];
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -69,19 +72,28 @@ const CVSS_V3_COMPONENTS: Record<string, { name: string; values: Record<string, 
   }
 };
 
-const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({
-  metrics,
-  cvss2Score,
-  cvss2Severity,
-  cvss30Score,
-  cvss30Severity,
-  cvss31Score,
-  cvss31Severity
-}) => {
-  // Build available versions from both sources
+// SSVC severity colors
+const getSsvcColor = (type: string, value: string | null) => {
+  if (!value) return '#6b7280';
+  const v = value.toLowerCase();
+  if (type === 'exploitation') {
+    if (v === 'active') return '#ef4444';
+    if (v === 'poc') return '#f59e0b';
+    return '#10b981';
+  }
+  if (type === 'automatable') {
+    return v === 'yes' ? '#ef4444' : '#10b981';
+  }
+  if (type === 'technicalImpact') {
+    return v === 'total' ? '#ef4444' : '#f59e0b';
+  }
+  return '#6b7280';
+};
+
+const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({ metrics, kev, ssvc }) => {
+  // Build available versions from metrics array (single source of truth)
   const availableVersions: { version: string; score: number; severity: string; vectorString: string | null }[] = [];
 
-  // First try metrics array
   if (metrics && metrics.length > 0) {
     for (const m of metrics) {
       availableVersions.push({
@@ -90,17 +102,6 @@ const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({
         severity: m.severity,
         vectorString: m.vector_string
       });
-    }
-  } else {
-    // Fallback to individual fields
-    if (cvss2Score !== null && cvss2Score !== undefined) {
-      availableVersions.push({ version: '2.0', score: cvss2Score, severity: cvss2Severity || 'UNKNOWN', vectorString: null });
-    }
-    if (cvss30Score !== null && cvss30Score !== undefined) {
-      availableVersions.push({ version: '3.0', score: cvss30Score, severity: cvss30Severity || 'UNKNOWN', vectorString: null });
-    }
-    if (cvss31Score !== null && cvss31Score !== undefined) {
-      availableVersions.push({ version: '3.1', score: cvss31Score, severity: cvss31Severity || 'UNKNOWN', vectorString: null });
     }
   }
 
@@ -181,94 +182,124 @@ const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({
         ))}
       </div>
 
-      {/* Active Version Details */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Score Display */}
+      {/* Version Comparison Chart - only show if multiple versions */}
+      {availableVersions.length > 1 && (
         <div className="p-6 rounded-lg border" style={{
           background: 'var(--cyber-surface)',
           borderColor: 'var(--cyber-border)'
         }}>
           <h3 className="text-sm font-semibold text-gray-400 mono mb-4">
-            {VERSION_LABELS[activeMetric.version]} SCORE
+            VERSION COMPARISON
           </h3>
+          <ResponsiveContainer width="100%" height={140}>
+            <BarChart data={chartData} layout="vertical" margin={{ left: 60, right: 20 }}>
+              <XAxis type="number" domain={[0, 10]} tick={{ fill: '#6b7280', fontSize: 11 }} />
+              <YAxis type="category" dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} width={60} />
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (active && payload && payload.length) {
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-lg">
+                        <p className="text-cyan-400 mono text-sm font-medium">{data.name}</p>
+                        <p className="text-gray-300 mono text-xs">Score: {data.score.toFixed(1)}</p>
+                        <p className="text-gray-400 mono text-xs">Severity: {data.severity}</p>
+                      </div>
+                    );
+                  }
+                  return null;
+                }}
+              />
+              <Bar dataKey="score" radius={[0, 4, 4, 0]}>
+                {chartData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={SEVERITY_COLORS[entry.severity]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
-          <div className="flex items-center gap-6">
-            {/* Score Circle */}
-            <div
-              className="w-24 h-24 rounded-full flex items-center justify-center border-4"
-              style={{
-                borderColor: SEVERITY_COLORS[activeMetric.severity],
-                backgroundColor: `${SEVERITY_COLORS[activeMetric.severity]}10`
-              }}
-            >
-              <span
-                className="text-3xl font-bold mono"
-                style={{ color: SEVERITY_COLORS[activeMetric.severity] }}
-              >
-                {activeMetric.score.toFixed(1)}
+      {/* CISA Indicators - KEV and SSVC */}
+      {(kev || (ssvc && ssvc.length > 0)) && (
+        <div className="flex flex-wrap gap-3">
+          {/* KEV Indicator */}
+          {kev && (
+            <div className="px-4 py-2.5 rounded-lg border mono text-sm font-medium border-red-500 bg-red-500/10 text-red-400">
+              <span className="flex items-center gap-2">
+                <Shield className="h-4 w-4" strokeWidth={1.5} />
+                CISA KEV
+                <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-500/20 text-red-400">
+                  EXPLOITED
+                </span>
               </span>
             </div>
+          )}
 
-            {/* Severity Badge */}
-            <div>
+          {/* SSVC Indicators */}
+          {ssvc && ssvc.length > 0 && ssvc.map((s, i) => (
+            <React.Fragment key={i}>
               <div
-                className="inline-flex items-center px-4 py-2 rounded-lg border text-lg font-bold mono"
+                className="px-4 py-2.5 rounded-lg border mono text-sm font-medium"
                 style={{
-                  backgroundColor: `${SEVERITY_COLORS[activeMetric.severity]}20`,
-                  borderColor: `${SEVERITY_COLORS[activeMetric.severity]}40`,
-                  color: SEVERITY_COLORS[activeMetric.severity]
+                  backgroundColor: `${getSsvcColor('exploitation', s.exploitation)}10`,
+                  borderColor: `${getSsvcColor('exploitation', s.exploitation)}40`,
+                  color: getSsvcColor('exploitation', s.exploitation)
                 }}
               >
-                {activeMetric.severity}
+                <span className="flex items-center gap-2">
+                  <Zap className="h-4 w-4" strokeWidth={1.5} />
+                  Exploitation
+                  <span
+                    className="px-2 py-0.5 rounded text-xs font-bold"
+                    style={{ backgroundColor: `${getSsvcColor('exploitation', s.exploitation)}20` }}
+                  >
+                    {s.exploitation?.toUpperCase() || 'UNKNOWN'}
+                  </span>
+                </span>
               </div>
-              <p className="text-xs text-gray-500 mono mt-2">
-                {activeMetric.score >= 9.0 ? 'Immediate action required' :
-                 activeMetric.score >= 7.0 ? 'High priority remediation' :
-                 activeMetric.score >= 4.0 ? 'Schedule remediation' :
-                 'Low priority'}
-              </p>
-            </div>
-          </div>
+              <div
+                className="px-4 py-2.5 rounded-lg border mono text-sm font-medium"
+                style={{
+                  backgroundColor: `${getSsvcColor('automatable', s.automatable)}10`,
+                  borderColor: `${getSsvcColor('automatable', s.automatable)}40`,
+                  color: getSsvcColor('automatable', s.automatable)
+                }}
+              >
+                <span className="flex items-center gap-2">
+                  <Target className="h-4 w-4" strokeWidth={1.5} />
+                  Automatable
+                  <span
+                    className="px-2 py-0.5 rounded text-xs font-bold"
+                    style={{ backgroundColor: `${getSsvcColor('automatable', s.automatable)}20` }}
+                  >
+                    {s.automatable?.toUpperCase() || 'UNKNOWN'}
+                  </span>
+                </span>
+              </div>
+              <div
+                className="px-4 py-2.5 rounded-lg border mono text-sm font-medium"
+                style={{
+                  backgroundColor: `${getSsvcColor('technicalImpact', s.technical_impact)}10`,
+                  borderColor: `${getSsvcColor('technicalImpact', s.technical_impact)}40`,
+                  color: getSsvcColor('technicalImpact', s.technical_impact)
+                }}
+              >
+                <span className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4" strokeWidth={1.5} />
+                  Impact
+                  <span
+                    className="px-2 py-0.5 rounded text-xs font-bold"
+                    style={{ backgroundColor: `${getSsvcColor('technicalImpact', s.technical_impact)}20` }}
+                  >
+                    {s.technical_impact?.toUpperCase() || 'UNKNOWN'}
+                  </span>
+                </span>
+              </div>
+            </React.Fragment>
+          ))}
         </div>
-
-        {/* Version Comparison Chart */}
-        {availableVersions.length > 1 && (
-          <div className="p-6 rounded-lg border" style={{
-            background: 'var(--cyber-surface)',
-            borderColor: 'var(--cyber-border)'
-          }}>
-            <h3 className="text-sm font-semibold text-gray-400 mono mb-4">
-              VERSION COMPARISON
-            </h3>
-            <ResponsiveContainer width="100%" height={140}>
-              <BarChart data={chartData} layout="vertical" margin={{ left: 60, right: 20 }}>
-                <XAxis type="number" domain={[0, 10]} tick={{ fill: '#6b7280', fontSize: 11 }} />
-                <YAxis type="category" dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} width={60} />
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (active && payload && payload.length) {
-                      const data = payload[0].payload;
-                      return (
-                        <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-lg">
-                          <p className="text-cyan-400 mono text-sm font-medium">{data.name}</p>
-                          <p className="text-gray-300 mono text-xs">Score: {data.score.toFixed(1)}</p>
-                          <p className="text-gray-400 mono text-xs">Severity: {data.severity}</p>
-                        </div>
-                      );
-                    }
-                    return null;
-                  }}
-                />
-                <Bar dataKey="score" radius={[0, 4, 4, 0]}>
-                  {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={SEVERITY_COLORS[entry.severity]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Vector String Breakdown */}
       {activeMetric.vectorString && (
