@@ -23,9 +23,24 @@ export interface JobRun {
   id: number;
   startTime: string;
   endTime: string | null;
-  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   itemsProcessed: number;
+  progressPercent: number;
+  itemsAdded: number;
+  itemsUpdated: number;
+  itemsUnchanged: number;
+  currentPhase: string | null;
+  lastHeartbeat: string | null;
+  totalFiles: number | null;
   error: string | null;
+}
+
+export interface JobLog {
+  id: number;
+  timestamp: string;
+  level: 'INFO' | 'WARN' | 'ERROR';
+  message: string;
+  metadata: Record<string, unknown> | null;
 }
 
 export interface Watchlist {
@@ -63,4 +78,14 @@ export interface QueryModel {
   cvss31_max?: number;
   kev?: boolean;
   epss_min?: number;
+  // Vendor/product filtering
+  vendors?: string[];
+  products?: string[];
+}
+
+export interface FilterPreset {
+  id: string;
+  name: string;
+  query: QueryModel;
+  isBuiltIn?: boolean;
 }

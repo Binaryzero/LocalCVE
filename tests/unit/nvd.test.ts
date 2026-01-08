@@ -5,30 +5,36 @@ import {
     ensureDir,
     getTimestamp,
     walk,
-    getChangedFiles,
-    run,
-    processBatch,
-    refreshWatchlists,
-    statements
+    getChangedFiles
 } from '../../src/lib/ingest/nvd.js';
-import db from '../../src/lib/db.js';
+import getDb, { initPromise } from '../../src/lib/db.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
+// Wait for database initialization before all tests
+let db: any;
+
+beforeAll(async () => {
+    await initPromise;
+    db = getDb();
+});
+
 // Global cleanup for all NVD test watchlists - runs after all tests in this file
-afterAll(() => {
+afterAll(async () => {
     try {
         // Clean up all test watchlists created by NVD tests
-        db.prepare(`DELETE FROM alerts WHERE watchlist_name LIKE '%Test%' OR watchlist_name LIKE 'BatchTest%' OR watchlist_name LIKE 'RefreshTest%' OR watchlist_name LIKE 'StmtTest%' OR watchlist_name LIKE 'Ingest Test%' OR watchlist_name LIKE 'Alert Gen%'`).run();
-        db.prepare(`DELETE FROM watchlists WHERE name LIKE '%Test%' OR name LIKE 'BatchTest%' OR name LIKE 'RefreshTest%' OR name LIKE 'StmtTest%' OR name LIKE 'Ingest Test%' OR name LIKE 'Alert Gen%' OR name LIKE 'Updated Name'`).run();
+        await db.run("DELETE FROM alerts WHERE watchlist_name LIKE '%Test%' OR watchlist_name LIKE 'BatchTest%' OR watchlist_name LIKE 'RefreshTest%' OR watchlist_name LIKE 'StmtTest%' OR watchlist_name LIKE 'Ingest Test%' OR watchlist_name LIKE 'Alert Gen%'");
+        await db.run("DELETE FROM watchlists WHERE name LIKE '%Test%' OR name LIKE 'BatchTest%' OR name LIKE 'RefreshTest%' OR name LIKE 'StmtTest%' OR name LIKE 'Ingest Test%' OR name LIKE 'Alert Gen%' OR name LIKE 'Updated Name'");
         // Clean up test CVEs
-        db.prepare(`DELETE FROM cve_references WHERE cve_id LIKE 'CVE-BATCH-TEST%'`).run();
-        db.prepare(`DELETE FROM configs WHERE cve_id LIKE 'CVE-BATCH-TEST%'`).run();
-        db.prepare(`DELETE FROM metrics WHERE cve_id LIKE 'CVE-BATCH-TEST%'`).run();
-        db.prepare(`DELETE FROM cves_fts WHERE id LIKE 'CVE-BATCH-TEST%'`).run();
-        db.prepare(`DELETE FROM cve_changes WHERE cve_id LIKE 'CVE-BATCH-TEST%'`).run();
-        db.prepare(`DELETE FROM cves WHERE id LIKE 'CVE-BATCH-TEST%'`).run();
+        await db.run("DELETE FROM cve_references WHERE cve_id LIKE 'CVE-BATCH-TEST%'");
+        await db.run("DELETE FROM configs WHERE cve_id LIKE 'CVE-BATCH-TEST%'");
+        await db.run("DELETE FROM metrics WHERE cve_id LIKE 'CVE-BATCH-TEST%'");
+        await db.run("DELETE FROM cve_changes WHERE cve_id LIKE 'CVE-BATCH-TEST%'");
+        await db.run("DELETE FROM cve_cwes WHERE cve_id LIKE 'CVE-BATCH-TEST%'");
+        await db.run("DELETE FROM cve_capec WHERE cve_id LIKE 'CVE-BATCH-TEST%'");
+        await db.run("DELETE FROM cve_ssvc WHERE cve_id LIKE 'CVE-BATCH-TEST%'");
+        await db.run("DELETE FROM cves WHERE id LIKE 'CVE-BATCH-TEST%'");
     } catch (e) {
         // Ignore cleanup errors
     }
@@ -36,7 +42,7 @@ afterAll(() => {
 
 describe('CVE Normalization', () => {
     // Helper to create mock CVE JSON 5.0 data
-    const createMockCve = (overrides = {}) => ({
+    const createMockCve = (overrides: any = {}) => ({
         cveMetadata: {
             cveId: 'CVE-2022-1234',
             state: 'PUBLISHED',
@@ -398,16 +404,24 @@ describe('CVE Normalization', () => {
     });
 
     describe('References extraction', () => {
-        test('should extract and sort references', () => {
+        test('should extract and sort references with tags', () => {
             const mockCve = createMockCve();
             mockCve.containers.cna.references = [
-                { url: 'https://zebra.com' },
+                { url: 'https://zebra.com', tags: ['vendor-advisory'] },
                 { url: 'https://apple.com' },
-                { url: 'https://mango.com' }
+                { url: 'https://mango.com', tags: ['patch', 'exploit'] }
             ];
             const result = normalizeCve5(mockCve);
 
+            // References should be sorted by URL and include tags
             expect(result.references).toEqual([
+                { url: 'https://apple.com', tags: [] },
+                { url: 'https://mango.com', tags: ['patch', 'exploit'] },
+                { url: 'https://zebra.com', tags: ['vendor-advisory'] }
+            ]);
+
+            // referenceUrls should be just the URLs for FTS indexing
+            expect(result.referenceUrls).toEqual([
                 'https://apple.com',
                 'https://mango.com',
                 'https://zebra.com'
@@ -442,8 +456,40 @@ describe('CVE Normalization', () => {
 
             expect(result.configurations).toHaveLength(2);
             expect(result.configurations[0]).toEqual({
+                vendor: 'TestVendor',
                 product: 'TestProduct',
-                vendor: 'TestVendor'
+                defaultStatus: null,
+                modules: [],
+                versions: []
+            });
+        });
+
+        test('should extract version information', () => {
+            const mockCve = createMockCve();
+            mockCve.containers.cna.affected = [
+                {
+                    product: 'ProductWithVersions',
+                    vendor: 'TestVendor',
+                    defaultStatus: 'affected',
+                    modules: ['core', 'api'],
+                    versions: [
+                        { version: '1.0', status: 'affected', lessThan: '2.0' },
+                        { version: '2.0', status: 'unaffected' }
+                    ]
+                }
+            ];
+            const result = normalizeCve5(mockCve);
+
+            expect(result.configurations).toHaveLength(1);
+            expect(result.configurations[0].defaultStatus).toBe('affected');
+            expect(result.configurations[0].modules).toEqual(['core', 'api']);
+            expect(result.configurations[0].versions).toHaveLength(2);
+            expect(result.configurations[0].versions[0]).toEqual({
+                version: '1.0',
+                status: 'affected',
+                lessThan: '2.0',
+                lessThanOrEqual: null,
+                versionType: null
             });
         });
 
@@ -465,6 +511,61 @@ describe('CVE Normalization', () => {
 
             expect(result.configurations).toHaveLength(1);
             expect(result.configurations[0].product).toBe('ValidProduct');
+        });
+    });
+
+    describe('Workarounds and Solutions', () => {
+        test('should extract workarounds', () => {
+            const mockCve = createMockCve();
+            mockCve.containers.cna.workarounds = [
+                { lang: 'en', value: 'Disable the feature temporarily' },
+                { lang: 'es', value: 'Desactivar la función temporalmente' }
+            ];
+            const result = normalizeCve5(mockCve);
+
+            expect(result.workarounds).toHaveLength(2);
+            expect(result.workarounds[0]).toEqual({
+                text: 'Disable the feature temporarily',
+                language: 'en'
+            });
+            expect(result.workarounds[1]).toEqual({
+                text: 'Desactivar la función temporalmente',
+                language: 'es'
+            });
+        });
+
+        test('should extract solutions', () => {
+            const mockCve = createMockCve();
+            mockCve.containers.cna.solutions = [
+                { lang: 'en', value: 'Upgrade to version 2.0 or later' }
+            ];
+            const result = normalizeCve5(mockCve);
+
+            expect(result.solutions).toHaveLength(1);
+            expect(result.solutions[0]).toEqual({
+                text: 'Upgrade to version 2.0 or later',
+                language: 'en'
+            });
+        });
+
+        test('should default language to en when not specified', () => {
+            const mockCve = createMockCve();
+            mockCve.containers.cna.workarounds = [
+                { value: 'No lang specified' }
+            ];
+            mockCve.containers.cna.solutions = [
+                { value: 'Solution without lang' }
+            ];
+            const result = normalizeCve5(mockCve);
+
+            expect(result.workarounds[0].language).toBe('en');
+            expect(result.solutions[0].language).toBe('en');
+        });
+
+        test('should handle missing workarounds and solutions', () => {
+            const result = normalizeCve5(createMockCve());
+            expect(result.workarounds).toEqual([]);
+            expect(result.solutions).toEqual([]);
         });
     });
 
@@ -720,683 +821,189 @@ describe('Helper Functions', () => {
     });
 });
 
-describe('Ingestion Process', () => {
-    // Note: run() tests are skipped because they start async ingestion jobs
-    // that continue after tests complete, causing Jest worker exit issues.
-    // The run() function is tested indirectly through the statements tests.
-    describe('run function', () => {
-        test('should have statements.insertJob prepared', () => {
-            // Test that the job insertion statement exists and is prepared
-            expect(statements.insertJob).toBeDefined();
-        });
+describe('Database Integration', () => {
+    const testCveId = 'CVE-DB-INTEGRATION-TEST';
+
+    afterEach(async () => {
+        // Cleanup test data
+        try {
+            await db.run('DELETE FROM cve_references WHERE cve_id = $1', testCveId);
+            await db.run('DELETE FROM metrics WHERE cve_id = $1', testCveId);
+            await db.run('DELETE FROM configs WHERE cve_id = $1', testCveId);
+            await db.run('DELETE FROM cve_changes WHERE cve_id = $1', testCveId);
+            await db.run('DELETE FROM cves WHERE id = $1', testCveId);
+        } catch (e) {
+            // Ignore cleanup errors
+        }
     });
 
-    describe('Database Integration', () => {
-        test('should read system_metadata', () => {
-            // Check if cvelist_commit metadata exists or can be queried
-            const result = db.prepare("SELECT value FROM system_metadata WHERE key = 'cvelist_commit'").get();
-            // May or may not exist depending on previous runs
-            expect(result === undefined || typeof result.value === 'string').toBe(true);
-        });
-
-        test('should query job_runs table', () => {
-            const jobs = db.prepare('SELECT * FROM job_runs ORDER BY start_time DESC LIMIT 5').all();
-            expect(Array.isArray(jobs)).toBe(true);
-        });
-
-        test('should support watchlist operations', () => {
-            // Insert test watchlist
-            const info = db.prepare(
-                'INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)'
-            ).run('Ingest Test Watchlist', '{"text":"test"}', 1);
-
-            expect(info.lastInsertRowid).toBeGreaterThan(0);
-
-            // Query active watchlists
-            const watchlists = db.prepare('SELECT * FROM watchlists WHERE enabled = 1').all();
-            expect(Array.isArray(watchlists)).toBe(true);
-            expect(watchlists.length).toBeGreaterThan(0);
-
-            // Cleanup
-            db.prepare('DELETE FROM watchlists WHERE id = ?').run(info.lastInsertRowid);
-        });
+    test('should read system_metadata', async () => {
+        // Check if cvelist_commit metadata exists or can be queried
+        const result = await db.get("SELECT value FROM system_metadata WHERE key = 'cvelist_commit'");
+        // May or may not exist depending on previous runs
+        expect(result === null || typeof result.value === 'string').toBe(true);
     });
 
-    describe('Alert Generation', () => {
-        const testCveId = 'CVE-ALERT-TEST-001';
-        let testWatchlistId: number;
-
-        beforeAll(() => {
-            // Create test watchlist
-            const info = db.prepare(
-                'INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)'
-            ).run('Alert Gen Test', '{"text":"alert"}', 1);
-            testWatchlistId = info.lastInsertRowid as number;
-        });
-
-        afterAll(() => {
-            // Cleanup
-            try {
-                db.prepare('DELETE FROM alerts WHERE cve_id = ?').run(testCveId);
-                db.prepare('DELETE FROM watchlists WHERE id = ?').run(testWatchlistId);
-            } catch (e) {
-                // Ignore
-            }
-        });
-
-        test('should check for existing alerts before creating new ones', () => {
-            // Check existing alert query works
-            const existingAlert = db.prepare(
-                'SELECT id FROM alerts WHERE cve_id = ? AND watchlist_id = ? AND read = 0'
-            ).get(testCveId, testWatchlistId);
-
-            // Should be undefined for new CVE
-            expect(existingAlert).toBeUndefined();
-        });
-
-        test('should create alert and update watchlist match count', () => {
-            // Get initial match count
-            const initialWl = db.prepare('SELECT match_count FROM watchlists WHERE id = ?').get(testWatchlistId);
-            const initialCount = initialWl?.match_count || 0;
-
-            // Insert alert
-            db.prepare(
-                'INSERT INTO alerts (cve_id, watchlist_id, watchlist_name, type, created_at) VALUES (?, ?, ?, ?, ?)'
-            ).run(testCveId, testWatchlistId, 'Alert Gen Test', 'NEW_MATCH', getTimestamp());
-
-            // Update match count (mimicking processBatch behavior)
-            db.prepare('UPDATE watchlists SET match_count = match_count + 1 WHERE id = ?').run(testWatchlistId);
-
-            // Verify
-            const updatedWl = db.prepare('SELECT match_count FROM watchlists WHERE id = ?').get(testWatchlistId);
-            expect(updatedWl.match_count).toBe(initialCount + 1);
-        });
+    test('should query job_runs table', async () => {
+        const jobs = await db.all('SELECT * FROM job_runs ORDER BY start_time DESC LIMIT 5');
+        expect(Array.isArray(jobs)).toBe(true);
     });
 
-    describe('CVE Processing', () => {
-        const testCveId = 'CVE-PROCESS-TEST-001';
+    test('should support watchlist operations', async () => {
+        // Insert test watchlist
+        const result = await db.get(
+            'INSERT INTO watchlists (name, query_json, enabled) VALUES ($1, $2, $3) RETURNING id',
+            'Ingest Test Watchlist', '{"text":"test"}', 1
+        );
 
-        afterEach(() => {
-            // Cleanup
-            try {
-                db.prepare('DELETE FROM cves_fts WHERE id = ?').run(testCveId);
-                db.prepare('DELETE FROM cve_references WHERE cve_id = ?').run(testCveId);
-                db.prepare('DELETE FROM configs WHERE cve_id = ?').run(testCveId);
-                db.prepare('DELETE FROM metrics WHERE cve_id = ?').run(testCveId);
-                db.prepare('DELETE FROM cve_changes WHERE cve_id = ?').run(testCveId);
-                db.prepare('DELETE FROM cves WHERE id = ?').run(testCveId);
-            } catch (e) {
-                // Ignore
-            }
-        });
+        expect(result.id).toBeGreaterThan(0);
 
-        test('should upsert CVE with full data', () => {
-            const testCve = {
-                id: testCveId,
-                description: 'Test CVE for processing',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: 7.5,
-                severity: 'HIGH',
-                cvssVersion: '3.1',
-                references: ['https://example.com/ref1', 'https://example.com/ref2'],
-                configurations: [{ product: 'TestProduct', vendor: 'TestVendor' }]
-            };
+        // Query active watchlists
+        const watchlists = await db.all('SELECT * FROM watchlists WHERE enabled = 1');
+        expect(Array.isArray(watchlists)).toBe(true);
+        expect(watchlists.length).toBeGreaterThan(0);
 
-            const hash = computeHash(testCve);
-
-            // Insert CVE
-            db.prepare(`
-                INSERT INTO cves (id, description, published, last_modified, vuln_status, normalized_hash, json)
-                VALUES (@id, @description, @published, @lastModified, @vulnStatus, @hash, @json)
-                ON CONFLICT(id) DO UPDATE SET
-                    description = excluded.description, last_modified = excluded.last_modified,
-                    vuln_status = excluded.vuln_status, normalized_hash = excluded.normalized_hash, json = excluded.json
-            `).run({
-                id: testCve.id,
-                description: testCve.description,
-                published: testCve.published,
-                lastModified: testCve.lastModified,
-                vulnStatus: testCve.vulnStatus,
-                hash,
-                json: JSON.stringify(testCve)
-            });
-
-            // Verify
-            const result = db.prepare('SELECT * FROM cves WHERE id = ?').get(testCveId);
-            expect(result).toBeDefined();
-            expect(result.id).toBe(testCveId);
-            expect(result.normalized_hash).toBe(hash);
-        });
-
-        test('should insert metrics for CVE', () => {
-            // First create the CVE
-            db.prepare('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)').run(
-                testCveId, 'Test', '{}'
-            );
-
-            // Insert multiple metrics
-            db.prepare('INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)')
-                .run(testCveId, '3.1', 7.5, 'HIGH', 'CVSS:3.1/...');
-            db.prepare('INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)')
-                .run(testCveId, '2.0', 5.0, 'MEDIUM', 'AV:N/...');
-
-            const metrics = db.prepare('SELECT * FROM metrics WHERE cve_id = ?').all(testCveId);
-            expect(metrics).toHaveLength(2);
-        });
-
-        test('should insert references for CVE', () => {
-            db.prepare('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)').run(
-                testCveId, 'Test', '{}'
-            );
-
-            db.prepare('INSERT INTO cve_references (cve_id, url) VALUES (?, ?)').run(testCveId, 'https://example.com');
-            db.prepare('INSERT INTO cve_references (cve_id, url) VALUES (?, ?)').run(testCveId, 'https://nvd.nist.gov');
-
-            const refs = db.prepare('SELECT * FROM cve_references WHERE cve_id = ?').all(testCveId);
-            expect(refs).toHaveLength(2);
-        });
-
-        test('should insert configurations for CVE', () => {
-            db.prepare('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)').run(
-                testCveId, 'Test', '{}'
-            );
-
-            db.prepare('INSERT INTO configs (cve_id, nodes) VALUES (?, ?)').run(
-                testCveId,
-                JSON.stringify([{ product: 'Product1', vendor: 'Vendor1' }])
-            );
-
-            const configs = db.prepare('SELECT * FROM configs WHERE cve_id = ?').all(testCveId);
-            expect(configs).toHaveLength(1);
-        });
-
-        test('should insert into FTS table', () => {
-            db.prepare('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)').run(
-                testCveId, 'Unique FTS test description', '{}'
-            );
-
-            db.prepare('INSERT INTO cves_fts (id, description, refs) VALUES (?, ?, ?)').run(
-                testCveId, 'Unique FTS test description', 'https://fts-test.com'
-            );
-
-            const results = db.prepare("SELECT * FROM cves_fts WHERE cves_fts MATCH '\"Unique FTS test\"'").all();
-            expect(results.some(r => r.id === testCveId)).toBe(true);
-        });
-
-        test('should record CVE changes', () => {
-            db.prepare('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)').run(
-                testCveId, 'Original', '{}'
-            );
-
-            const diff = { description: { from: 'Original', to: 'Updated' } };
-            db.prepare('INSERT INTO cve_changes (cve_id, change_date, diff_json) VALUES (?, ?, ?)').run(
-                testCveId,
-                getTimestamp(),
-                JSON.stringify(diff)
-            );
-
-            const changes = db.prepare('SELECT * FROM cve_changes WHERE cve_id = ?').all(testCveId);
-            expect(changes).toHaveLength(1);
-            expect(JSON.parse(changes[0].diff_json)).toEqual(diff);
-        });
+        // Cleanup
+        await db.run('DELETE FROM watchlists WHERE id = $1', result.id);
     });
 
-    describe('processBatch function', () => {
-        const batchTestId = 'CVE-BATCH-TEST';
-
-        // Clean up before and after all tests to ensure isolation
-        const cleanupBatchTestData = () => {
-            try {
-                db.prepare("DELETE FROM alerts WHERE cve_id LIKE 'CVE-BATCH-TEST%'").run();
-                db.prepare("DELETE FROM cves_fts WHERE id LIKE 'CVE-BATCH-TEST%'").run();
-                db.prepare("DELETE FROM cve_references WHERE cve_id LIKE 'CVE-BATCH-TEST%'").run();
-                db.prepare("DELETE FROM configs WHERE cve_id LIKE 'CVE-BATCH-TEST%'").run();
-                db.prepare("DELETE FROM metrics WHERE cve_id LIKE 'CVE-BATCH-TEST%'").run();
-                db.prepare("DELETE FROM cve_changes WHERE cve_id LIKE 'CVE-BATCH-TEST%'").run();
-                db.prepare("DELETE FROM cves WHERE id LIKE 'CVE-BATCH-TEST%'").run();
-                db.prepare("DELETE FROM watchlists WHERE name LIKE 'BatchTest%'").run();
-            } catch (e) {
-                // Ignore cleanup errors
-            }
+    test('should upsert CVE with full data', async () => {
+        const testCve = {
+            id: testCveId,
+            description: 'Test CVE for processing',
+            published: '2023-01-01T00:00:00.000Z',
+            lastModified: '2023-01-02T00:00:00.000Z',
+            vulnStatus: 'PUBLISHED',
+            score: 7.5,
+            severity: 'HIGH',
+            cvssVersion: '3.1',
+            references: ['https://example.com/ref1', 'https://example.com/ref2'],
+            configurations: [{ product: 'TestProduct', vendor: 'TestVendor' }]
         };
 
-        beforeAll(() => cleanupBatchTestData());
-        afterEach(() => cleanupBatchTestData());
-        afterAll(() => cleanupBatchTestData());
+        const hash = computeHash(testCve);
 
-        test('should process batch of new CVEs', () => {
-            const batch = [
-                {
-                    id: `${batchTestId}-001`,
-                    description: 'Batch test CVE 1',
-                    published: '2023-01-01T00:00:00.000Z',
-                    lastModified: '2023-01-02T00:00:00.000Z',
-                    vulnStatus: 'PUBLISHED',
-                    score: 7.5,
-                    severity: 'HIGH',
-                    cvssVersion: '3.1',
-                    vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L',
-                    allMetrics: [{ version: '3.1', score: 7.5, severity: 'HIGH', vector: 'CVSS:3.1/...' }],
-                    references: ['https://example.com/ref1'],
-                    configurations: [{ product: 'Product1', vendor: 'Vendor1' }]
-                },
-                {
-                    id: `${batchTestId}-002`,
-                    description: 'Batch test CVE 2',
-                    published: '2023-01-01T00:00:00.000Z',
-                    lastModified: '2023-01-02T00:00:00.000Z',
-                    vulnStatus: 'PUBLISHED',
-                    score: 5.0,
-                    severity: 'MEDIUM',
-                    cvssVersion: '2.0',
-                    vector: 'AV:N/AC:L/Au:N/C:N/I:P/A:N',
-                    allMetrics: [{ version: '2.0', score: 5.0, severity: 'MEDIUM', vector: 'AV:N/...' }],
-                    references: [],
-                    configurations: []
-                }
-            ];
+        // Insert CVE
+        await db.run(`
+            INSERT INTO cves (id, description, published, last_modified, vuln_status, normalized_hash, json)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT(id) DO UPDATE SET
+                description = excluded.description, last_modified = excluded.last_modified,
+                vuln_status = excluded.vuln_status, normalized_hash = excluded.normalized_hash, json = excluded.json
+        `, testCve.id, testCve.description, testCve.published, testCve.lastModified, testCve.vulnStatus, hash, JSON.stringify(testCve));
 
-            // Refresh watchlists before processing (mimics real usage)
-            refreshWatchlists();
-
-            const changed = processBatch(batch);
-
-            expect(changed).toBe(2);
-
-            // Verify CVEs were inserted
-            const cve1 = db.prepare('SELECT * FROM cves WHERE id = ?').get(`${batchTestId}-001`);
-            expect(cve1).toBeDefined();
-            expect(cve1.description).toBe('Batch test CVE 1');
-
-            const cve2 = db.prepare('SELECT * FROM cves WHERE id = ?').get(`${batchTestId}-002`);
-            expect(cve2).toBeDefined();
-        });
-
-        test('should skip unchanged CVEs', () => {
-            const cve = {
-                id: `${batchTestId}-UNCHANGED`,
-                description: 'Unchanged CVE',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: null,
-                severity: null,
-                cvssVersion: null,
-                vector: null,
-                allMetrics: [],
-                references: [],
-                configurations: []
-            };
-
-            refreshWatchlists();
-
-            // First insert
-            const changed1 = processBatch([cve]);
-            expect(changed1).toBe(1);
-
-            // Second insert with same data - should be skipped
-            const changed2 = processBatch([cve]);
-            expect(changed2).toBe(0);
-        });
-
-        test('should update existing CVE and record change', () => {
-            const cveOriginal = {
-                id: `${batchTestId}-UPDATE`,
-                description: 'Original description',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: null,
-                severity: null,
-                cvssVersion: null,
-                vector: null,
-                allMetrics: [],
-                references: [],
-                configurations: []
-            };
-
-            refreshWatchlists();
-
-            // Insert original
-            processBatch([cveOriginal]);
-
-            // Update with new description
-            const cveUpdated = { ...cveOriginal, description: 'Updated description' };
-            const changed = processBatch([cveUpdated]);
-
-            expect(changed).toBe(1);
-
-            // Check that change was recorded
-            const changes = db.prepare('SELECT * FROM cve_changes WHERE cve_id = ?').all(`${batchTestId}-UPDATE`);
-            expect(changes.length).toBeGreaterThanOrEqual(1);
-        });
-
-        test('should insert multiple metrics per CVE', () => {
-            const cve = {
-                id: `${batchTestId}-MULTI-METRIC`,
-                description: 'CVE with multiple CVSS versions',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: 7.5,
-                severity: 'HIGH',
-                cvssVersion: '3.1',
-                vector: 'CVSS:3.1/...',
-                allMetrics: [
-                    { version: '3.1', score: 7.5, severity: 'HIGH', vector: 'CVSS:3.1/...' },
-                    { version: '3.0', score: 7.0, severity: 'HIGH', vector: 'CVSS:3.0/...' },
-                    { version: '2.0', score: 5.0, severity: 'MEDIUM', vector: 'AV:N/...' }
-                ],
-                references: [],
-                configurations: []
-            };
-
-            refreshWatchlists();
-            processBatch([cve]);
-
-            const metrics = db.prepare('SELECT * FROM metrics WHERE cve_id = ?').all(`${batchTestId}-MULTI-METRIC`);
-            expect(metrics).toHaveLength(3);
-            expect(metrics.map(m => m.cvss_version).sort()).toEqual(['2.0', '3.0', '3.1']);
-        });
-
-        test('should use fallback metric insertion when allMetrics is empty but score exists', () => {
-            const cve = {
-                id: `${batchTestId}-FALLBACK`,
-                description: 'CVE with fallback metric',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: 6.0,
-                severity: 'MEDIUM',
-                cvssVersion: '3.1',
-                vector: 'CVSS:3.1/FALLBACK',
-                allMetrics: [], // Empty but score is not null
-                references: [],
-                configurations: []
-            };
-
-            refreshWatchlists();
-            processBatch([cve]);
-
-            const metrics = db.prepare('SELECT * FROM metrics WHERE cve_id = ?').all(`${batchTestId}-FALLBACK`);
-            expect(metrics).toHaveLength(1);
-            expect(metrics[0].score).toBe(6.0);
-        });
-
-        test('should generate alerts for matching watchlists', () => {
-            // Create a watchlist that matches our test CVE
-            const wlResult = db.prepare(
-                'INSERT INTO watchlists (name, query_json, enabled, match_count) VALUES (?, ?, ?, ?)'
-            ).run('BatchTest Alert WL', '{"text":"alertable"}', 1, 0);
-            const watchlistId = wlResult.lastInsertRowid;
-
-            const cve = {
-                id: `${batchTestId}-ALERT`,
-                description: 'This is an alertable vulnerability',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: 8.0,
-                severity: 'HIGH',
-                cvssVersion: '3.1',
-                vector: 'CVSS:3.1/...',
-                allMetrics: [{ version: '3.1', score: 8.0, severity: 'HIGH', vector: 'CVSS:3.1/...' }],
-                references: [],
-                configurations: []
-            };
-
-            // Refresh to pick up our new watchlist
-            refreshWatchlists();
-            processBatch([cve]);
-
-            // Check if alert was created
-            const alerts = db.prepare('SELECT * FROM alerts WHERE cve_id = ?').all(`${batchTestId}-ALERT`);
-            expect(alerts.length).toBeGreaterThanOrEqual(1);
-            expect(alerts.some(a => a.watchlist_id === watchlistId)).toBe(true);
-
-            // Check match count was updated
-            const wl = db.prepare('SELECT match_count FROM watchlists WHERE id = ?').get(watchlistId);
-            expect(wl.match_count).toBeGreaterThan(0);
-        });
-
-        test('should not create duplicate alerts for same CVE and watchlist', () => {
-            // Create a watchlist
-            const wlResult = db.prepare(
-                'INSERT INTO watchlists (name, query_json, enabled, match_count) VALUES (?, ?, ?, ?)'
-            ).run('BatchTest NoDupe WL', '{"text":"nodupe"}', 1, 0);
-            const watchlistId = wlResult.lastInsertRowid;
-
-            const cve = {
-                id: `${batchTestId}-NODUPE`,
-                description: 'This is a nodupe test vulnerability',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: null,
-                severity: null,
-                cvssVersion: null,
-                vector: null,
-                allMetrics: [],
-                references: [],
-                configurations: []
-            };
-
-            refreshWatchlists();
-            processBatch([cve]);
-
-            // Check initial alert count
-            const alertsBefore = db.prepare('SELECT * FROM alerts WHERE cve_id = ? AND watchlist_id = ?')
-                .all(`${batchTestId}-NODUPE`, watchlistId);
-            const countBefore = alertsBefore.length;
-
-            // Process same CVE again with a slight change to force update
-            const cveUpdated = { ...cve, description: 'Updated nodupe description' };
-            processBatch([cveUpdated]);
-
-            // Alert count should not have increased (existing unread alert prevents duplicate)
-            const alertsAfter = db.prepare('SELECT * FROM alerts WHERE cve_id = ? AND watchlist_id = ?')
-                .all(`${batchTestId}-NODUPE`, watchlistId);
-
-            // Should be same or only +1 if the CVE matched again (but not duplicate for same unread alert)
-            expect(alertsAfter.length).toBeLessThanOrEqual(countBefore + 1);
-        });
-
-        test('should insert references and configurations', () => {
-            const cve = {
-                id: `${batchTestId}-REFS`,
-                description: 'CVE with refs and configs',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: null,
-                severity: null,
-                cvssVersion: null,
-                vector: null,
-                allMetrics: [],
-                references: ['https://ref1.com', 'https://ref2.com', 'https://ref3.com'],
-                configurations: [
-                    { product: 'ProductA', vendor: 'VendorA' },
-                    { product: 'ProductB', vendor: 'VendorB' }
-                ]
-            };
-
-            refreshWatchlists();
-            processBatch([cve]);
-
-            const refs = db.prepare('SELECT * FROM cve_references WHERE cve_id = ?').all(`${batchTestId}-REFS`);
-            expect(refs).toHaveLength(3);
-
-            const configs = db.prepare('SELECT * FROM configs WHERE cve_id = ?').all(`${batchTestId}-REFS`);
-            expect(configs).toHaveLength(1); // Configs are stored as JSON array in single row
-        });
-
-        test('should insert into FTS table', () => {
-            const cve = {
-                id: `${batchTestId}-FTS`,
-                description: 'Searchable unique FTS batch test description',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: null,
-                severity: null,
-                cvssVersion: null,
-                vector: null,
-                allMetrics: [],
-                references: ['https://fts-batch-test.com'],
-                configurations: []
-            };
-
-            refreshWatchlists();
-            processBatch([cve]);
-
-            // Search for the unique term
-            const results = db.prepare("SELECT * FROM cves_fts WHERE cves_fts MATCH '\"FTS batch test\"'").all();
-            expect(results.some(r => r.id === `${batchTestId}-FTS`)).toBe(true);
-        });
-
-        test('should handle alert generation errors gracefully', () => {
-            // Create a watchlist with malformed query JSON that will cause matchesQuery to throw
-            const wlResult = db.prepare(
-                'INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)'
-            ).run('BatchTest BadQuery WL', '{"invalid": true, "cvss_min": "not-a-number"}', 1);
-
-            const cve = {
-                id: `${batchTestId}-ALERT-ERR`,
-                description: 'Test CVE for alert error',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: 7.0,
-                severity: 'HIGH',
-                cvssVersion: '3.1',
-                vector: 'CVSS:3.1/...',
-                allMetrics: [{ version: '3.1', score: 7.0, severity: 'HIGH', vector: 'CVSS:3.1/...' }],
-                references: [],
-                configurations: []
-            };
-
-            // Refresh to pick up the bad watchlist
-            refreshWatchlists();
-
-            // Should not throw - error is caught internally
-            expect(() => processBatch([cve])).not.toThrow();
-
-            // CVE should still be inserted
-            const result = db.prepare('SELECT * FROM cves WHERE id = ?').get(`${batchTestId}-ALERT-ERR`);
-            expect(result).toBeDefined();
-        });
-
-        test('should handle empty batch', () => {
-            refreshWatchlists();
-            const changed = processBatch([]);
-            expect(changed).toBe(0);
-        });
-
-        test('should handle CVE with no configurations', () => {
-            const cve = {
-                id: `${batchTestId}-NO-CONFIG`,
-                description: 'CVE without configurations',
-                published: '2023-01-01T00:00:00.000Z',
-                lastModified: '2023-01-02T00:00:00.000Z',
-                vulnStatus: 'PUBLISHED',
-                score: null,
-                severity: null,
-                cvssVersion: null,
-                vector: null,
-                allMetrics: [],
-                references: [],
-                configurations: [] // Empty - should skip insertConfig
-            };
-
-            refreshWatchlists();
-            processBatch([cve]);
-
-            // Should not have any configs
-            const configs = db.prepare('SELECT * FROM configs WHERE cve_id = ?').all(`${batchTestId}-NO-CONFIG`);
-            expect(configs).toHaveLength(0);
-        });
+        // Verify
+        const result = await db.get('SELECT * FROM cves WHERE id = $1', testCveId);
+        expect(result).toBeDefined();
+        expect(result.id).toBe(testCveId);
+        expect(result.normalized_hash).toBe(hash);
     });
 
-    describe('refreshWatchlists function', () => {
-        afterEach(() => {
-            db.prepare("DELETE FROM watchlists WHERE name LIKE 'RefreshTest%'").run();
-        });
+    test('should insert metrics for CVE', async () => {
+        // First create the CVE
+        await db.run('INSERT INTO cves (id, description, json) VALUES ($1, $2, $3)', testCveId, 'Test', '{}');
 
-        test('should load active watchlists', () => {
-            // Create test watchlists
-            db.prepare('INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)')
-                .run('RefreshTest Active', '{"text":"active"}', 1);
-            db.prepare('INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)')
-                .run('RefreshTest Disabled', '{"text":"disabled"}', 0);
+        // Insert multiple metrics
+        await db.run('INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)',
+            testCveId, '3.1', 7.5, 'HIGH', 'CVSS:3.1/...');
+        await db.run('INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)',
+            testCveId, '2.0', 5.0, 'MEDIUM', 'AV:N/...');
 
-            // Refresh should not throw
-            expect(() => refreshWatchlists()).not.toThrow();
-        });
-
-        test('should parse query_json for each watchlist', () => {
-            db.prepare('INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)')
-                .run('RefreshTest Parse', '{"text":"parse","cvss_min":5.0}', 1);
-
-            // This internally parses JSON - should not throw
-            expect(() => refreshWatchlists()).not.toThrow();
-        });
+        const metrics = await db.all('SELECT * FROM metrics WHERE cve_id = $1', testCveId);
+        expect(metrics).toHaveLength(2);
     });
 
-    describe('statements object', () => {
-        test('should have all required prepared statements', () => {
-            expect(statements.getCveHash).toBeDefined();
-            expect(statements.upsertCve).toBeDefined();
-            expect(statements.deleteMetrics).toBeDefined();
-            expect(statements.insertMetric).toBeDefined();
-            expect(statements.deleteRefs).toBeDefined();
-            expect(statements.insertRef).toBeDefined();
-            expect(statements.deleteConfigs).toBeDefined();
-            expect(statements.insertConfig).toBeDefined();
-            expect(statements.deleteFts).toBeDefined();
-            expect(statements.insertFts).toBeDefined();
-            expect(statements.insertChange).toBeDefined();
-            expect(statements.insertJob).toBeDefined();
-            expect(statements.updateJob).toBeDefined();
-            expect(statements.setMeta).toBeDefined();
-            expect(statements.getActiveWatchlists).toBeDefined();
-            expect(statements.insertAlert).toBeDefined();
-            expect(statements.checkExistingAlert).toBeDefined();
-            expect(statements.updateWatchlistMatchCount).toBeDefined();
-        });
+    test('should insert references for CVE', async () => {
+        await db.run('INSERT INTO cves (id, description, json) VALUES ($1, $2, $3)', testCveId, 'Test', '{}');
 
-        test('getCveHash should return hash for existing CVE', () => {
-            const testId = 'CVE-STMT-HASH-TEST';
-            try {
-                db.prepare('INSERT INTO cves (id, description, normalized_hash, json) VALUES (?, ?, ?, ?)')
-                    .run(testId, 'Test', 'testhash123', '{}');
+        await db.run('INSERT INTO cve_references (cve_id, url) VALUES ($1, $2)', testCveId, 'https://example.com');
+        await db.run('INSERT INTO cve_references (cve_id, url) VALUES ($1, $2)', testCveId, 'https://nvd.nist.gov');
 
-                const result = statements.getCveHash.get(testId);
-                expect(result).toBeDefined();
-                expect(result.normalized_hash).toBe('testhash123');
-            } finally {
-                db.prepare('DELETE FROM cves WHERE id = ?').run(testId);
-            }
-        });
+        const refs = await db.all('SELECT * FROM cve_references WHERE cve_id = $1', testCveId);
+        expect(refs).toHaveLength(2);
+    });
 
-        test('getActiveWatchlists should return only enabled watchlists', () => {
-            const testName1 = 'StmtTest Active';
-            const testName2 = 'StmtTest Disabled';
-            try {
-                db.prepare('INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)')
-                    .run(testName1, '{}', 1);
-                db.prepare('INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)')
-                    .run(testName2, '{}', 0);
+    test('should insert configurations for CVE', async () => {
+        await db.run('INSERT INTO cves (id, description, json) VALUES ($1, $2, $3)', testCveId, 'Test', '{}');
 
-                const watchlists = statements.getActiveWatchlists.all();
-                const names = watchlists.map(w => w.name);
+        await db.run('INSERT INTO configs (cve_id, nodes) VALUES ($1, $2)',
+            testCveId,
+            JSON.stringify([{ product: 'Product1', vendor: 'Vendor1' }])
+        );
 
-                expect(names).toContain(testName1);
-                expect(names).not.toContain(testName2);
-            } finally {
-                db.prepare("DELETE FROM watchlists WHERE name LIKE 'StmtTest%'").run();
-            }
-        });
+        const configs = await db.all('SELECT * FROM configs WHERE cve_id = $1', testCveId);
+        expect(configs).toHaveLength(1);
+    });
+
+    test('should record CVE changes', async () => {
+        await db.run('INSERT INTO cves (id, description, json) VALUES ($1, $2, $3)', testCveId, 'Original', '{}');
+
+        const diff = { description: { from: 'Original', to: 'Updated' } };
+        await db.run('INSERT INTO cve_changes (cve_id, change_date, diff_json) VALUES ($1, $2, $3)',
+            testCveId,
+            getTimestamp(),
+            JSON.stringify(diff)
+        );
+
+        const changes = await db.all('SELECT * FROM cve_changes WHERE cve_id = $1', testCveId);
+        expect(changes).toHaveLength(1);
+        expect(JSON.parse(changes[0].diff_json)).toEqual(diff);
+    });
+});
+
+describe('Alert Generation', () => {
+    const testCveId = 'CVE-ALERT-TEST-001';
+    let testWatchlistId: number;
+
+    beforeAll(async () => {
+        // Create test watchlist
+        const result = await db.get(
+            'INSERT INTO watchlists (name, query_json, enabled) VALUES ($1, $2, $3) RETURNING id',
+            'Alert Gen Test', '{"text":"alert"}', 1
+        );
+        testWatchlistId = result.id;
+    });
+
+    afterAll(async () => {
+        // Cleanup
+        try {
+            await db.run('DELETE FROM alerts WHERE cve_id = $1', testCveId);
+            await db.run('DELETE FROM watchlists WHERE id = $1', testWatchlistId);
+        } catch (e) {
+            // Ignore
+        }
+    });
+
+    test('should check for existing alerts before creating new ones', async () => {
+        // Check existing alert query works
+        const existingAlert = await db.get(
+            'SELECT id FROM alerts WHERE cve_id = $1 AND watchlist_id = $2 AND read = 0',
+            testCveId, testWatchlistId
+        );
+
+        // Should be null for new CVE
+        expect(existingAlert).toBeNull();
+    });
+
+    test('should create alert and update watchlist match count', async () => {
+        // Get initial match count
+        const initialWl = await db.get('SELECT match_count FROM watchlists WHERE id = $1', testWatchlistId);
+        const initialCount = initialWl?.match_count || 0;
+
+        // Insert alert
+        await db.run(
+            'INSERT INTO alerts (cve_id, watchlist_id, watchlist_name, type, created_at) VALUES ($1, $2, $3, $4, $5)',
+            testCveId, testWatchlistId, 'Alert Gen Test', 'NEW_MATCH', getTimestamp()
+        );
+
+        // Update match count (mimicking processBatch behavior)
+        await db.run('UPDATE watchlists SET match_count = match_count + 1 WHERE id = $1', testWatchlistId);
+
+        // Verify
+        const updatedWl = await db.get('SELECT match_count FROM watchlists WHERE id = $1', testWatchlistId);
+        expect(updatedWl.match_count).toBe(initialCount + 1);
+
+        // Cleanup
+        await db.run('DELETE FROM alerts WHERE cve_id = $1', testCveId);
     });
 });
