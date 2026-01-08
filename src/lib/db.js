@@ -25,8 +25,10 @@ class DuckDBWrapper {
       // Don't let one failed operation break the queue
       throw err;
     });
-    // Update queue to wait for this operation
-    this.queryQueue = result.catch(() => {}); // Swallow errors in queue tracking
+    // Update queue to wait for this operation (log errors but don't break the chain)
+    this.queryQueue = result.catch((err) => {
+      console.error('[DuckDB] Query in queue failed:', err.message);
+    });
     return result;
   }
 
@@ -232,6 +234,11 @@ class DuckDBWrapper {
 let db;
 
 // Schema initialization - DuckDB compatible
+// NOTE: Foreign key constraints (ON DELETE CASCADE) were intentionally removed during SQLite->DuckDB migration.
+// Rationale: (1) CVEs are never deleted in normal operation - they are only updated/added during ingestion.
+// (2) DuckDB's FK handling adds overhead to bulk inserts (326k+ CVEs).
+// (3) Orphaned records are cleaned up during full re-ingestion via "DELETE FROM table WHERE cve_id = ?".
+// If CVE deletion is needed in the future, implement cascade delete in application layer.
 const initSql = `
 CREATE TABLE IF NOT EXISTS cves (
   id VARCHAR PRIMARY KEY,
@@ -252,6 +259,7 @@ CREATE TABLE IF NOT EXISTS metrics (
   severity VARCHAR,
   vector_string VARCHAR
 );
+CREATE INDEX IF NOT EXISTS idx_metrics_cve_id ON metrics(cve_id);
 
 CREATE TABLE IF NOT EXISTS cve_references (
   cve_id VARCHAR,

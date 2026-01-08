@@ -352,6 +352,11 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
 - ✓ API endpoints verified working with new database
 - ✓ Unit tests: 109 passing (matcher.test.ts + nvd.test.ts)
 - ✓ Note: server.test.ts has ESM compatibility issues with Jest (known limitation)
+- ✓ **PR #4 Review Fixes** (Jan 8, 2026):
+  - ✓ Added error logging to query queue catch block (was swallowing errors silently)
+  - ✓ Added index on metrics.cve_id for query performance (critical for 326k+ CVEs)
+  - ✓ Added parseErrors tracking to ingestion (counts failed file parses)
+  - ✓ Documented FK constraint removal decision (intentional for bulk insert performance)
 
 ## Critical Missing Features
 

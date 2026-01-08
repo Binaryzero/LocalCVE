@@ -818,7 +818,7 @@ async function runIngest(jobId, useBulkMode = false) {
     const dbRef = await ensureDb();
     const logger = new JobLogger(jobId, dbRef);
     let totalProcessed = 0;
-    let stats = { added: 0, updated: 0, unchanged: 0 };
+    let stats = { added: 0, updated: 0, unchanged: 0, parseErrors: 0 };
     let totalFiles = 0;
     let lastHeartbeat = Date.now();
 
@@ -928,7 +928,12 @@ async function runIngest(jobId, useBulkMode = false) {
                 const content = await fs.promises.readFile(filePath, 'utf8');
                 return normalizeCve5(JSON.parse(content), kevSet);
             } catch (err) {
-                // Silent failure for parse errors (too noisy otherwise)
+                // Track failures but don't log each one individually (too noisy)
+                stats.parseErrors++;
+                // Log unexpected errors (not just malformed JSON or missing files)
+                if (err.code !== 'ENOENT' && !err.message?.includes('Unexpected token')) {
+                    console.warn(`[Ingest] Unexpected error processing ${path.basename(filePath)}: ${err.message}`);
+                }
                 return null;
             }
         };
@@ -1039,7 +1044,8 @@ async function runIngest(jobId, useBulkMode = false) {
             totalProcessed,
             added: stats.added,
             updated: stats.updated,
-            unchanged: stats.unchanged
+            unchanged: stats.unchanged,
+            parseErrors: stats.parseErrors
         });
 
         await dbRef.run('UPDATE job_runs SET end_time = $1, status = $2, items_processed = $3, error = $4 WHERE id = $5',
