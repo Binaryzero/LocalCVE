@@ -1,4 +1,43 @@
 /**
+ * Converts a relative date preset to absolute date range.
+ * @param {string} relativePeriod - 'today', 'last_7_days', 'last_30_days', 'last_90_days'
+ * @returns {{ from: string, to: string | undefined }} ISO date strings (YYYY-MM-DD)
+ */
+export function getDateRangeFromRelative(relativePeriod) {
+    const now = new Date();
+    // Use local date parts to avoid timezone issues
+    const formatDate = (d) => {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+    const todayStr = formatDate(now);
+
+    switch (relativePeriod) {
+        case 'today':
+            return { from: todayStr, to: undefined };
+        case 'last_7_days': {
+            const from = new Date(now);
+            from.setDate(from.getDate() - 7);
+            return { from: formatDate(from), to: todayStr };
+        }
+        case 'last_30_days': {
+            const from = new Date(now);
+            from.setDate(from.getDate() - 30);
+            return { from: formatDate(from), to: todayStr };
+        }
+        case 'last_90_days': {
+            const from = new Date(now);
+            from.setDate(from.getDate() - 90);
+            return { from: formatDate(from), to: todayStr };
+        }
+        default:
+            return { from: undefined, to: undefined };
+    }
+}
+
+/**
  * Matches a CVE object against a query model.
  * @param {Object} cve - The normalized CVE object.
  * @param {Object} query - The QueryModel from a watchlist.
@@ -22,13 +61,27 @@ export function matchesQuery(cve, query) {
         if (!inId && !inDesc && !inRefs) return false;
     }
 
-    // Published date range
-    if (query.published_from && cve.published < query.published_from) return false;
-    if (query.published_to && cve.published > query.published_to) return false;
+    // Published date range - prefer relative dates if specified (truly dynamic)
+    let publishedFrom = query.published_from;
+    let publishedTo = query.published_to;
+    if (query.published_relative) {
+        const range = getDateRangeFromRelative(query.published_relative);
+        publishedFrom = range.from;
+        publishedTo = range.to;
+    }
+    if (publishedFrom && cve.published < publishedFrom) return false;
+    if (publishedTo && cve.published > publishedTo) return false;
 
-    // Modified date range
-    if (query.modified_from && cve.lastModified < query.modified_from) return false;
-    if (query.modified_to && cve.lastModified > query.modified_to) return false;
+    // Modified date range - prefer relative dates if specified (truly dynamic)
+    let modifiedFrom = query.modified_from;
+    let modifiedTo = query.modified_to;
+    if (query.modified_relative) {
+        const range = getDateRangeFromRelative(query.modified_relative);
+        modifiedFrom = range.from;
+        modifiedTo = range.to;
+    }
+    if (modifiedFrom && cve.lastModified < modifiedFrom) return false;
+    if (modifiedTo && cve.lastModified > modifiedTo) return false;
 
     // CVSS Score - primary score (backward compatibility)
     const primaryScore = cve.score || 0;

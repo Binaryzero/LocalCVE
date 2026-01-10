@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from 'recharts';
-import { Shield, AlertTriangle, Info, Zap, Target } from 'lucide-react';
+import { Shield, AlertTriangle, Info, Zap, Target, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface CvssMetric {
   cvss_version: string;
@@ -33,7 +32,8 @@ const SEVERITY_COLORS: Record<string, string> = {
 const VERSION_LABELS: Record<string, string> = {
   '2.0': 'CVSS 2.0',
   '3.0': 'CVSS 3.0',
-  '3.1': 'CVSS 3.1'
+  '3.1': 'CVSS 3.1',
+  '4.0': 'CVSS 4.0'
 };
 
 // CVSS v3.x vector components and their descriptions
@@ -68,6 +68,54 @@ const CVSS_V3_COMPONENTS: Record<string, { name: string; values: Record<string, 
   },
   'A': {
     name: 'Availability',
+    values: { 'N': 'None', 'L': 'Low', 'H': 'High' }
+  }
+};
+
+// CVSS v4.0 vector components and their descriptions
+const CVSS_V4_COMPONENTS: Record<string, { name: string; values: Record<string, string> }> = {
+  'AV': {
+    name: 'Attack Vector',
+    values: { 'N': 'Network', 'A': 'Adjacent', 'L': 'Local', 'P': 'Physical' }
+  },
+  'AC': {
+    name: 'Attack Complexity',
+    values: { 'L': 'Low', 'H': 'High' }
+  },
+  'AT': {
+    name: 'Attack Requirements',
+    values: { 'N': 'None', 'P': 'Present' }
+  },
+  'PR': {
+    name: 'Privileges Required',
+    values: { 'N': 'None', 'L': 'Low', 'H': 'High' }
+  },
+  'UI': {
+    name: 'User Interaction',
+    values: { 'N': 'None', 'P': 'Passive', 'A': 'Active' }
+  },
+  'VC': {
+    name: 'Vuln Confidentiality',
+    values: { 'N': 'None', 'L': 'Low', 'H': 'High' }
+  },
+  'VI': {
+    name: 'Vuln Integrity',
+    values: { 'N': 'None', 'L': 'Low', 'H': 'High' }
+  },
+  'VA': {
+    name: 'Vuln Availability',
+    values: { 'N': 'None', 'L': 'Low', 'H': 'High' }
+  },
+  'SC': {
+    name: 'Sub Confidentiality',
+    values: { 'N': 'None', 'L': 'Low', 'H': 'High' }
+  },
+  'SI': {
+    name: 'Sub Integrity',
+    values: { 'N': 'None', 'L': 'Low', 'H': 'High' }
+  },
+  'SA': {
+    name: 'Sub Availability',
     values: { 'N': 'None', 'L': 'Low', 'H': 'High' }
   }
 };
@@ -109,6 +157,7 @@ const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({ metrics, kev, ssvc })
   availableVersions.sort((a, b) => parseFloat(b.version) - parseFloat(a.version));
 
   const [activeTab, setActiveTab] = useState(availableVersions[0]?.version || '3.1');
+  const [showVectorDetails, setShowVectorDetails] = useState(false);
 
   if (availableVersions.length === 0) {
     return (
@@ -128,13 +177,17 @@ const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({ metrics, kev, ssvc })
   const parseVectorString = (vectorString: string | null): { key: string; label: string; value: string; fullValue: string }[] => {
     if (!vectorString) return [];
 
-    // Remove CVSS:3.x/ prefix if present
+    // Detect CVSS version from prefix and select appropriate component map
+    const isV4 = vectorString.startsWith('CVSS:4.0/');
+    const componentMap = isV4 ? CVSS_V4_COMPONENTS : CVSS_V3_COMPONENTS;
+
+    // Remove CVSS:X.X/ prefix if present
     const cleanVector = vectorString.replace(/^CVSS:\d+\.\d+\//, '');
     const parts = cleanVector.split('/');
 
     return parts.map(part => {
       const [key, value] = part.split(':');
-      const component = CVSS_V3_COMPONENTS[key];
+      const component = componentMap[key];
       return {
         key,
         label: component?.name || key,
@@ -144,17 +197,11 @@ const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({ metrics, kev, ssvc })
     }).filter(p => p.key && p.value);
   };
 
-  // Prepare chart data
-  const chartData = availableVersions.map(v => ({
-    name: VERSION_LABELS[v.version] || `CVSS ${v.version}`,
-    score: v.score,
-    severity: v.severity
-  }));
-
   return (
     <div className="space-y-6">
-      {/* Tabs */}
+      {/* All indicators on same row: CVSS tabs + KEV + SSVC */}
       <div className="flex flex-wrap gap-2">
+        {/* CVSS Version Tabs */}
         {availableVersions.map(v => (
           <button
             key={v.version}
@@ -180,64 +227,22 @@ const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({ metrics, kev, ssvc })
             </span>
           </button>
         ))}
-      </div>
 
-      {/* Version Comparison Chart - only show if multiple versions */}
-      {availableVersions.length > 1 && (
-        <div className="p-6 rounded-lg border" style={{
-          background: 'var(--cyber-surface)',
-          borderColor: 'var(--cyber-border)'
-        }}>
-          <h3 className="text-sm font-semibold text-gray-400 mono mb-4">
-            VERSION COMPARISON
-          </h3>
-          <ResponsiveContainer width="100%" height={140}>
-            <BarChart data={chartData} layout="vertical" margin={{ left: 60, right: 20 }}>
-              <XAxis type="number" domain={[0, 10]} tick={{ fill: '#6b7280', fontSize: 11 }} />
-              <YAxis type="category" dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} width={60} />
-              <Tooltip
-                content={({ active, payload }) => {
-                  if (active && payload && payload.length) {
-                    const data = payload[0].payload;
-                    return (
-                      <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-lg">
-                        <p className="text-cyan-400 mono text-sm font-medium">{data.name}</p>
-                        <p className="text-gray-300 mono text-xs">Score: {data.score.toFixed(1)}</p>
-                        <p className="text-gray-400 mono text-xs">Severity: {data.severity}</p>
-                      </div>
-                    );
-                  }
-                  return null;
-                }}
-              />
-              <Bar dataKey="score" radius={[0, 4, 4, 0]}>
-                {chartData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={SEVERITY_COLORS[entry.severity]} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* CISA Indicators - KEV and SSVC */}
-      {(kev || (ssvc && ssvc.length > 0)) && (
-        <div className="flex flex-wrap gap-3">
-          {/* KEV Indicator */}
-          {kev && (
-            <div className="px-4 py-2.5 rounded-lg border mono text-sm font-medium border-red-500 bg-red-500/10 text-red-400">
-              <span className="flex items-center gap-2">
-                <Shield className="h-4 w-4" strokeWidth={1.5} />
-                CISA KEV
-                <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-500/20 text-red-400">
-                  EXPLOITED
-                </span>
+        {/* KEV Indicator - same row */}
+        {kev && (
+          <div className="px-4 py-2.5 rounded-lg border mono text-sm font-medium border-red-500 bg-red-500/10 text-red-400">
+            <span className="flex items-center gap-2">
+              <Shield className="h-4 w-4" strokeWidth={1.5} />
+              CISA KEV
+              <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-500/20 text-red-400">
+                EXPLOITED
               </span>
-            </div>
-          )}
+            </span>
+          </div>
+        )}
 
-          {/* SSVC Indicators */}
-          {ssvc && ssvc.length > 0 && ssvc.map((s, i) => (
+        {/* SSVC Indicators - same row */}
+        {ssvc && ssvc.length > 0 && ssvc.map((s, i) => (
             <React.Fragment key={i}>
               <div
                 className="px-4 py-2.5 rounded-lg border mono text-sm font-medium"
@@ -298,43 +303,56 @@ const CvssVersionTabs: React.FC<CvssVersionTabsProps> = ({ metrics, kev, ssvc })
               </div>
             </React.Fragment>
           ))}
-        </div>
-      )}
+      </div>
 
-      {/* Vector String Breakdown */}
+      {/* Vector String - Collapsible */}
       {activeMetric.vectorString && (
-        <div className="p-6 rounded-lg border" style={{
+        <div className="rounded-lg border" style={{
           background: 'var(--cyber-surface)',
           borderColor: 'var(--cyber-border)'
         }}>
-          <div className="flex items-center justify-between mb-4">
+          <button
+            onClick={() => setShowVectorDetails(!showVectorDetails)}
+            className="w-full flex items-center justify-between p-4 hover:bg-cyan-500/5 transition-colors"
+          >
             <h3 className="text-sm font-semibold text-gray-400 mono flex items-center gap-2">
               <Info className="h-4 w-4" strokeWidth={1.5} />
               VECTOR STRING
             </h3>
-            <code className="text-xs text-cyan-400 mono bg-cyan-500/10 px-3 py-1.5 rounded-lg">
-              {activeMetric.vectorString}
-            </code>
-          </div>
+            <div className="flex items-center gap-3">
+              <code className="text-xs text-cyan-400 mono bg-cyan-500/10 px-3 py-1.5 rounded-lg">
+                {activeMetric.vectorString}
+              </code>
+              {showVectorDetails ? (
+                <ChevronUp className="h-4 w-4 text-gray-500" strokeWidth={1.5} />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-gray-500" strokeWidth={1.5} />
+              )}
+            </div>
+          </button>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {parseVectorString(activeMetric.vectorString).map(({ key, label, value, fullValue }) => (
-              <div
-                key={key}
-                className="p-3 rounded-lg border"
-                style={{
-                  background: 'rgba(6, 182, 212, 0.03)',
-                  borderColor: 'var(--cyber-border)'
-                }}
-              >
-                <p className="text-xs text-gray-500 mono mb-1">{label}</p>
-                <p className="text-sm text-gray-200 mono font-medium">
-                  {fullValue}
-                  <span className="text-cyan-400 ml-1">({value})</span>
-                </p>
+          {showVectorDetails && (
+            <div className="px-4 pb-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {parseVectorString(activeMetric.vectorString).map(({ key, label, value, fullValue }) => (
+                  <div
+                    key={key}
+                    className="p-3 rounded-lg border"
+                    style={{
+                      background: 'rgba(6, 182, 212, 0.03)',
+                      borderColor: 'var(--cyber-border)'
+                    }}
+                  >
+                    <p className="text-xs text-gray-500 mono mb-1">{label}</p>
+                    <p className="text-sm text-gray-200 mono font-medium">
+                      {fullValue}
+                      <span className="text-cyan-400 ml-1">({value})</span>
+                    </p>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
       )}
     </div>

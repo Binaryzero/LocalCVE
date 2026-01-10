@@ -293,18 +293,18 @@ describe('API Endpoints', () => {
             const hash = 'list-test-hash-001';
 
             try {
-                await db.run(`INSERT INTO cves (id, description, published, last_modified, normalized_hash, json) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(id) DO UPDATE SET description = $2`,
+                await db.run(`INSERT INTO cves (id, description, published, last_modified, normalized_hash, json) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET description = excluded.description`,
                     listTestCveId, 'Test CVE for list endpoint metrics', '2099-01-01T00:00:00Z', '2099-01-02T00:00:00Z', hash, testJson
                 );
                 // Insert metrics for all three CVSS versions
-                await db.run(`DELETE FROM metrics WHERE cve_id = $1`, listTestCveId);
-                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)`,
+                await db.run(`DELETE FROM metrics WHERE cve_id = ?`, listTestCveId);
+                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)`,
                     listTestCveId, '3.1', 8.0, 'HIGH', 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N'
                 );
-                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)`,
+                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)`,
                     listTestCveId, '3.0', 7.0, 'HIGH', 'CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N'
                 );
-                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)`,
+                await db.run(`INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)`,
                     listTestCveId, '2.0', 6.0, 'MEDIUM', 'AV:N/AC:L/Au:N/C:P/I:P/A:N'
                 );
             } catch (e) {
@@ -314,8 +314,8 @@ describe('API Endpoints', () => {
 
         afterAll(async () => {
             try {
-                await db.run(`DELETE FROM metrics WHERE cve_id = $1`, listTestCveId);
-                await db.run(`DELETE FROM cves WHERE id = $1`, listTestCveId);
+                await db.run(`DELETE FROM metrics WHERE cve_id = ?`, listTestCveId);
+                await db.run(`DELETE FROM cves WHERE id = ?`, listTestCveId);
             } catch (e) {
                 // Ignore cleanup errors
             }
@@ -335,7 +335,7 @@ describe('API Endpoints', () => {
 
         test('should return version-specific CVSS scores in list', async () => {
             // First verify our test data exists
-            const count = await db.get(`SELECT count(*) as c FROM cves WHERE id = $1`, listTestCveId);
+            const count = await db.get(`SELECT count(*) as c FROM cves WHERE id = ?`, listTestCveId);
             expect(Number(count?.c || 0)).toBeGreaterThan(0);
 
             // Get list without search to find our test CVE
@@ -885,8 +885,8 @@ describe('API Endpoints', () => {
             try {
                 await db.run(`
                     INSERT INTO cves (id, description, published, last_modified, normalized_hash, json)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT(id) DO UPDATE SET description = $2
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET description = excluded.description
                 `,
                     testCveId,
                     testCve.description,
@@ -897,20 +897,20 @@ describe('API Endpoints', () => {
                 );
 
                 // Insert metrics - all three CVSS versions to cover all switch cases
-                await db.run(`DELETE FROM metrics WHERE cve_id = $1`, testCveId);
+                await db.run(`DELETE FROM metrics WHERE cve_id = ?`, testCveId);
                 await db.run(`
                     INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string)
-                    VALUES ($1, $2, $3, $4, $5)
+                    VALUES (?, ?, ?, ?, ?)
                 `, testCveId, '3.1', 7.5, 'HIGH', 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L');
 
                 await db.run(`
                     INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string)
-                    VALUES ($1, $2, $3, $4, $5)
+                    VALUES (?, ?, ?, ?, ?)
                 `, testCveId, '3.0', 6.5, 'MEDIUM', 'CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L');
 
                 await db.run(`
                     INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string)
-                    VALUES ($1, $2, $3, $4, $5)
+                    VALUES (?, ?, ?, ?, ?)
                 `, testCveId, '2.0', 5.0, 'MEDIUM', 'AV:N/AC:L/Au:N/C:N/I:P/A:N');
             } catch (e) {
                 // Ignore errors if already exists
@@ -920,8 +920,8 @@ describe('API Endpoints', () => {
         afterAll(async () => {
             // Cleanup
             try {
-                await db.run('DELETE FROM metrics WHERE cve_id = $1', testCveId);
-                await db.run('DELETE FROM cves WHERE id = $1', testCveId);
+                await db.run('DELETE FROM metrics WHERE cve_id = ?', testCveId);
+                await db.run('DELETE FROM cves WHERE id = ?', testCveId);
             } catch (e) {
                 // Ignore cleanup errors
             }

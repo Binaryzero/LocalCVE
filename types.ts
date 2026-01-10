@@ -68,6 +68,10 @@ export interface QueryModel {
   published_to?: string;
   modified_from?: string;
   modified_to?: string;
+  // Relative date options (for watchlists that should use dynamic dates)
+  // Values: 'today', 'last_7_days', 'last_30_days'
+  published_relative?: string;
+  modified_relative?: string;
   cvss_min?: number;
   cvss_max?: number;
   cvss2_min?: number;
@@ -78,9 +82,13 @@ export interface QueryModel {
   cvss31_max?: number;
   kev?: boolean;
   epss_min?: number;
+  exploit_maturity?: 'A' | 'H' | 'F' | 'POC' | 'U';  // Attacked, High, Functional, PoC, Unproven
   // Vendor/product filtering
   vendors?: string[];
   products?: string[];
+  // Sorting
+  sort_by?: 'id' | 'score' | 'published';
+  sort_order?: 'asc' | 'desc';
 }
 
 export interface FilterPreset {
@@ -88,4 +96,21 @@ export interface FilterPreset {
   name: string;
   query: QueryModel;
   isBuiltIn?: boolean;
+  icon?: string;  // Lucide icon name
+  color?: string; // Tailwind color class (e.g., 'cyan', 'red', 'amber')
+}
+
+export interface AppSettings {
+  hideRejectedCves: boolean;
+  hideDisputedCves: boolean;
+}
+
+// Extended QueryModel for relative date support
+export interface RelativeDateFilter {
+  type: 'relative' | 'absolute';
+  // For relative: 'today', 'last_7_days', 'last_30_days', 'last_90_days', 'ytd'
+  relativePeriod?: string;
+  // For absolute: specific dates
+  absoluteFrom?: string;
+  absoluteTo?: string;
 }

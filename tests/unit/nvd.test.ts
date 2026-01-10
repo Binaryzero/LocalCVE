@@ -309,7 +309,7 @@ describe('CVE Normalization', () => {
             expect(result.score).toBe(7.5);
         });
 
-        test('should use first encountered v3.x as primary (v3.0 first)', () => {
+        test('should prefer v3.1 over v3.0 based on version priority', () => {
             const mockCve = createMockCve();
             mockCve.containers.cna.metrics = [
                 {
@@ -329,9 +329,9 @@ describe('CVE Normalization', () => {
             ];
             const result = normalizeCve5(mockCve);
 
-            // First v3.0 becomes primary since it's processed first
-            expect(result.cvssVersion).toBe('3.0');
-            expect(result.score).toBe(9.0);
+            // v3.1 is preferred over v3.0 due to version priority (4.0 > 3.1 > 3.0 > 2.0)
+            expect(result.cvssVersion).toBe('3.1');
+            expect(result.score).toBe(7.5);
         });
 
         test('should upgrade from v2.0 to v3.0 as primary when v3.0 is found', () => {
@@ -827,11 +827,11 @@ describe('Database Integration', () => {
     afterEach(async () => {
         // Cleanup test data
         try {
-            await db.run('DELETE FROM cve_references WHERE cve_id = $1', testCveId);
-            await db.run('DELETE FROM metrics WHERE cve_id = $1', testCveId);
-            await db.run('DELETE FROM configs WHERE cve_id = $1', testCveId);
-            await db.run('DELETE FROM cve_changes WHERE cve_id = $1', testCveId);
-            await db.run('DELETE FROM cves WHERE id = $1', testCveId);
+            await db.run('DELETE FROM cve_references WHERE cve_id = ?', testCveId);
+            await db.run('DELETE FROM metrics WHERE cve_id = ?', testCveId);
+            await db.run('DELETE FROM configs WHERE cve_id = ?', testCveId);
+            await db.run('DELETE FROM cve_changes WHERE cve_id = ?', testCveId);
+            await db.run('DELETE FROM cves WHERE id = ?', testCveId);
         } catch (e) {
             // Ignore cleanup errors
         }
@@ -850,13 +850,13 @@ describe('Database Integration', () => {
     });
 
     test('should support watchlist operations', async () => {
-        // Insert test watchlist
-        const result = await db.get(
-            'INSERT INTO watchlists (name, query_json, enabled) VALUES ($1, $2, $3) RETURNING id',
+        // Insert test watchlist - SQLite returns lastID instead of RETURNING
+        const insertResult = await db.run(
+            'INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)',
             'Ingest Test Watchlist', '{"text":"test"}', 1
         );
 
-        expect(result.id).toBeGreaterThan(0);
+        expect(insertResult.lastID).toBeGreaterThan(0);
 
         // Query active watchlists
         const watchlists = await db.all('SELECT * FROM watchlists WHERE enabled = 1');
@@ -864,7 +864,7 @@ describe('Database Integration', () => {
         expect(watchlists.length).toBeGreaterThan(0);
 
         // Cleanup
-        await db.run('DELETE FROM watchlists WHERE id = $1', result.id);
+        await db.run('DELETE FROM watchlists WHERE id = ?', insertResult.lastID);
     });
 
     test('should upsert CVE with full data', async () => {
@@ -886,14 +886,14 @@ describe('Database Integration', () => {
         // Insert CVE
         await db.run(`
             INSERT INTO cves (id, description, published, last_modified, vuln_status, normalized_hash, json)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 description = excluded.description, last_modified = excluded.last_modified,
                 vuln_status = excluded.vuln_status, normalized_hash = excluded.normalized_hash, json = excluded.json
         `, testCve.id, testCve.description, testCve.published, testCve.lastModified, testCve.vulnStatus, hash, JSON.stringify(testCve));
 
         // Verify
-        const result = await db.get('SELECT * FROM cves WHERE id = $1', testCveId);
+        const result = await db.get('SELECT * FROM cves WHERE id = ?', testCveId);
         expect(result).toBeDefined();
         expect(result.id).toBe(testCveId);
         expect(result.normalized_hash).toBe(hash);
@@ -901,51 +901,51 @@ describe('Database Integration', () => {
 
     test('should insert metrics for CVE', async () => {
         // First create the CVE
-        await db.run('INSERT INTO cves (id, description, json) VALUES ($1, $2, $3)', testCveId, 'Test', '{}');
+        await db.run('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)', testCveId, 'Test', '{}');
 
         // Insert multiple metrics
-        await db.run('INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)',
+        await db.run('INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)',
             testCveId, '3.1', 7.5, 'HIGH', 'CVSS:3.1/...');
-        await db.run('INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)',
+        await db.run('INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)',
             testCveId, '2.0', 5.0, 'MEDIUM', 'AV:N/...');
 
-        const metrics = await db.all('SELECT * FROM metrics WHERE cve_id = $1', testCveId);
+        const metrics = await db.all('SELECT * FROM metrics WHERE cve_id = ?', testCveId);
         expect(metrics).toHaveLength(2);
     });
 
     test('should insert references for CVE', async () => {
-        await db.run('INSERT INTO cves (id, description, json) VALUES ($1, $2, $3)', testCveId, 'Test', '{}');
+        await db.run('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)', testCveId, 'Test', '{}');
 
-        await db.run('INSERT INTO cve_references (cve_id, url) VALUES ($1, $2)', testCveId, 'https://example.com');
-        await db.run('INSERT INTO cve_references (cve_id, url) VALUES ($1, $2)', testCveId, 'https://nvd.nist.gov');
+        await db.run('INSERT INTO cve_references (cve_id, url) VALUES (?, ?)', testCveId, 'https://example.com');
+        await db.run('INSERT INTO cve_references (cve_id, url) VALUES (?, ?)', testCveId, 'https://nvd.nist.gov');
 
-        const refs = await db.all('SELECT * FROM cve_references WHERE cve_id = $1', testCveId);
+        const refs = await db.all('SELECT * FROM cve_references WHERE cve_id = ?', testCveId);
         expect(refs).toHaveLength(2);
     });
 
     test('should insert configurations for CVE', async () => {
-        await db.run('INSERT INTO cves (id, description, json) VALUES ($1, $2, $3)', testCveId, 'Test', '{}');
+        await db.run('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)', testCveId, 'Test', '{}');
 
-        await db.run('INSERT INTO configs (cve_id, nodes) VALUES ($1, $2)',
+        await db.run('INSERT INTO configs (cve_id, nodes) VALUES (?, ?)',
             testCveId,
             JSON.stringify([{ product: 'Product1', vendor: 'Vendor1' }])
         );
 
-        const configs = await db.all('SELECT * FROM configs WHERE cve_id = $1', testCveId);
+        const configs = await db.all('SELECT * FROM configs WHERE cve_id = ?', testCveId);
         expect(configs).toHaveLength(1);
     });
 
     test('should record CVE changes', async () => {
-        await db.run('INSERT INTO cves (id, description, json) VALUES ($1, $2, $3)', testCveId, 'Original', '{}');
+        await db.run('INSERT INTO cves (id, description, json) VALUES (?, ?, ?)', testCveId, 'Original', '{}');
 
         const diff = { description: { from: 'Original', to: 'Updated' } };
-        await db.run('INSERT INTO cve_changes (cve_id, change_date, diff_json) VALUES ($1, $2, $3)',
+        await db.run('INSERT INTO cve_changes (cve_id, change_date, diff_json) VALUES (?, ?, ?)',
             testCveId,
             getTimestamp(),
             JSON.stringify(diff)
         );
 
-        const changes = await db.all('SELECT * FROM cve_changes WHERE cve_id = $1', testCveId);
+        const changes = await db.all('SELECT * FROM cve_changes WHERE cve_id = ?', testCveId);
         expect(changes).toHaveLength(1);
         expect(JSON.parse(changes[0].diff_json)).toEqual(diff);
     });
@@ -956,19 +956,19 @@ describe('Alert Generation', () => {
     let testWatchlistId: number;
 
     beforeAll(async () => {
-        // Create test watchlist
-        const result = await db.get(
-            'INSERT INTO watchlists (name, query_json, enabled) VALUES ($1, $2, $3) RETURNING id',
+        // Create test watchlist - SQLite uses lastID instead of RETURNING
+        const result = await db.run(
+            'INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)',
             'Alert Gen Test', '{"text":"alert"}', 1
         );
-        testWatchlistId = result.id;
+        testWatchlistId = result.lastID;
     });
 
     afterAll(async () => {
         // Cleanup
         try {
-            await db.run('DELETE FROM alerts WHERE cve_id = $1', testCveId);
-            await db.run('DELETE FROM watchlists WHERE id = $1', testWatchlistId);
+            await db.run('DELETE FROM alerts WHERE cve_id = ?', testCveId);
+            await db.run('DELETE FROM watchlists WHERE id = ?', testWatchlistId);
         } catch (e) {
             // Ignore
         }
@@ -977,33 +977,33 @@ describe('Alert Generation', () => {
     test('should check for existing alerts before creating new ones', async () => {
         // Check existing alert query works
         const existingAlert = await db.get(
-            'SELECT id FROM alerts WHERE cve_id = $1 AND watchlist_id = $2 AND read = 0',
+            'SELECT id FROM alerts WHERE cve_id = ? AND watchlist_id = ? AND read = 0',
             testCveId, testWatchlistId
         );
 
-        // Should be null for new CVE
-        expect(existingAlert).toBeNull();
+        // Should be undefined for new CVE (SQLite returns undefined, not null)
+        expect(existingAlert).toBeUndefined();
     });
 
     test('should create alert and update watchlist match count', async () => {
         // Get initial match count
-        const initialWl = await db.get('SELECT match_count FROM watchlists WHERE id = $1', testWatchlistId);
+        const initialWl = await db.get('SELECT match_count FROM watchlists WHERE id = ?', testWatchlistId);
         const initialCount = initialWl?.match_count || 0;
 
         // Insert alert
         await db.run(
-            'INSERT INTO alerts (cve_id, watchlist_id, watchlist_name, type, created_at) VALUES ($1, $2, $3, $4, $5)',
+            'INSERT INTO alerts (cve_id, watchlist_id, watchlist_name, type, created_at) VALUES (?, ?, ?, ?, ?)',
             testCveId, testWatchlistId, 'Alert Gen Test', 'NEW_MATCH', getTimestamp()
         );
 
         // Update match count (mimicking processBatch behavior)
-        await db.run('UPDATE watchlists SET match_count = match_count + 1 WHERE id = $1', testWatchlistId);
+        await db.run('UPDATE watchlists SET match_count = match_count + 1 WHERE id = ?', testWatchlistId);
 
         // Verify
-        const updatedWl = await db.get('SELECT match_count FROM watchlists WHERE id = $1', testWatchlistId);
+        const updatedWl = await db.get('SELECT match_count FROM watchlists WHERE id = ?', testWatchlistId);
         expect(updatedWl.match_count).toBe(initialCount + 1);
 
         // Cleanup
-        await db.run('DELETE FROM alerts WHERE cve_id = $1', testCveId);
+        await db.run('DELETE FROM alerts WHERE cve_id = ?', testCveId);
     });
 });

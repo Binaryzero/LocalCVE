@@ -1,33 +1,68 @@
 import React, { useState, useEffect } from 'react';
-import { Bookmark, Plus, Trash2, Check, X, Zap } from 'lucide-react';
+import { Bookmark, Plus, Check, X, Zap, Shield, AlertTriangle, Clock, Eye, Calendar } from 'lucide-react';
 import { QueryModel, FilterPreset } from '../types';
 
 const STORAGE_KEY = 'localcve_filter_presets';
 
-// Built-in presets that cannot be deleted
-const BUILT_IN_PRESETS: FilterPreset[] = [
+// Default presets - must match Settings.tsx
+const DEFAULT_PRESETS: FilterPreset[] = [
   {
-    id: 'builtin_critical',
+    id: 'default_today',
+    name: 'Today',
+    query: { published_relative: 'today' },
+    icon: 'calendar',
+    color: 'green'
+  },
+  {
+    id: 'default_critical',
     name: 'Critical Only',
     query: { cvss_min: 9.0 },
-    isBuiltIn: true
+    icon: 'zap',
+    color: 'red'
   },
   {
-    id: 'builtin_high_recent',
+    id: 'default_high_recent',
     name: 'High + Recent',
-    query: {
-      cvss_min: 7.0,
-      published_from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-    },
-    isBuiltIn: true
+    query: { cvss_min: 7.0 },
+    icon: 'clock',
+    color: 'amber'
   },
   {
-    id: 'builtin_kev',
+    id: 'default_kev',
     name: 'Known Exploited',
     query: { kev: true },
-    isBuiltIn: true
+    icon: 'shield',
+    color: 'purple'
   }
 ];
+
+// Icon mapping
+const ICONS: Record<string, React.ComponentType<{ className?: string; strokeWidth?: number }>> = {
+  'zap': Zap,
+  'shield': Shield,
+  'alert-triangle': AlertTriangle,
+  'clock': Clock,
+  'eye': Eye,
+  'calendar': Calendar,
+};
+
+// Color classes
+const getColorClasses = (color: string, isActive: boolean) => {
+  const colors: Record<string, { border: string; bg: string; text: string }> = {
+    cyan: { border: 'border-cyan-500', bg: 'bg-cyan-500/20', text: 'text-cyan-400' },
+    red: { border: 'border-red-500', bg: 'bg-red-500/20', text: 'text-red-400' },
+    amber: { border: 'border-amber-500', bg: 'bg-amber-500/20', text: 'text-amber-400' },
+    green: { border: 'border-green-500', bg: 'bg-green-500/20', text: 'text-green-400' },
+    purple: { border: 'border-purple-500', bg: 'bg-purple-500/20', text: 'text-purple-400' },
+    blue: { border: 'border-blue-500', bg: 'bg-blue-500/20', text: 'text-blue-400' },
+    pink: { border: 'border-pink-500', bg: 'bg-pink-500/20', text: 'text-pink-400' },
+    gray: { border: 'border-gray-500', bg: 'bg-gray-500/20', text: 'text-gray-400' },
+  };
+  const c = colors[color] || colors.cyan;
+  return isActive
+    ? `${c.border} ${c.bg} ${c.text}`
+    : `border-gray-700 ${c.text} hover:${c.border}`;
+};
 
 interface FilterPresetsProps {
   currentFilters: QueryModel;
@@ -35,27 +70,59 @@ interface FilterPresetsProps {
 }
 
 const FilterPresets: React.FC<FilterPresetsProps> = ({ currentFilters, onApplyPreset }) => {
-  const [customPresets, setCustomPresets] = useState<FilterPreset[]>([]);
+  const [presets, setPresets] = useState<FilterPreset[]>([]);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
 
-  // Load custom presets from localStorage
-  useEffect(() => {
+  // Load presets from localStorage
+  const loadPresets = () => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        setCustomPresets(JSON.parse(stored));
+        setPresets(JSON.parse(stored));
+      } else {
+        // First run - use default presets
+        setPresets(DEFAULT_PRESETS);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_PRESETS));
       }
     } catch (e) {
       console.error('Failed to load presets:', e);
+      setPresets(DEFAULT_PRESETS);
     }
+  };
+
+  // Load on mount and listen for storage changes (sync with Settings)
+  useEffect(() => {
+    loadPresets();
+
+    // Listen for localStorage changes from other components (Settings)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY) {
+        loadPresets();
+      }
+    };
+
+    // Also listen for custom event for same-tab updates
+    const handlePresetUpdate = () => {
+      loadPresets();
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('presets-updated', handlePresetUpdate);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('presets-updated', handlePresetUpdate);
+    };
   }, []);
 
-  // Save custom presets to localStorage
-  const savePresets = (presets: FilterPreset[]) => {
-    setCustomPresets(presets);
+  // Save presets to localStorage
+  const savePresetsToStorage = (newPresets: FilterPreset[]) => {
+    setPresets(newPresets);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newPresets));
+      // Dispatch custom event for same-tab sync
+      window.dispatchEvent(new Event('presets-updated'));
     } catch (e) {
       console.error('Failed to save presets:', e);
     }
@@ -68,23 +135,19 @@ const FilterPresets: React.FC<FilterPresetsProps> = ({ currentFilters, onApplyPr
       id: `custom_${Date.now()}`,
       name: newPresetName.trim(),
       query: { ...currentFilters },
-      isBuiltIn: false
+      isBuiltIn: false,
+      color: 'cyan',
+      icon: 'zap'
     };
 
-    savePresets([...customPresets, newPreset]);
+    savePresetsToStorage([...presets, newPreset]);
     setNewPresetName('');
     setShowSaveDialog(false);
   };
 
-  const handleDeletePreset = (id: string) => {
-    savePresets(customPresets.filter(p => p.id !== id));
-  };
-
-  const allPresets = [...BUILT_IN_PRESETS, ...customPresets];
-
   // Check if current filters match a preset
   const isPresetActive = (preset: FilterPreset): boolean => {
-    const keys = ['text', 'cvss_min', 'cvss_max', 'kev', 'published_from', 'published_to'] as const;
+    const keys = ['text', 'cvss_min', 'cvss_max', 'kev', 'published_from', 'published_to', 'published_relative'] as const;
     return keys.every(key => {
       const presetVal = preset.query[key];
       const filterVal = currentFilters[key];
@@ -99,20 +162,9 @@ const FilterPresets: React.FC<FilterPresetsProps> = ({ currentFilters, onApplyPr
   return (
     <div className="space-y-3">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-gray-400">
-          <Bookmark className="h-4 w-4" strokeWidth={1.5} />
-          <span className="mono text-xs font-semibold">FILTER PRESETS</span>
-        </div>
-        {hasActiveFilters && (
-          <button
-            onClick={() => setShowSaveDialog(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 transition-all mono text-xs"
-          >
-            <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
-            SAVE
-          </button>
-        )}
+      <div className="flex items-center gap-2 text-gray-400">
+        <Bookmark className="h-4 w-4" strokeWidth={1.5} />
+        <span className="mono text-xs font-semibold">FILTER PRESETS</span>
       </div>
 
       {/* Save Dialog */}
@@ -146,45 +198,31 @@ const FilterPresets: React.FC<FilterPresetsProps> = ({ currentFilters, onApplyPr
         </div>
       )}
 
-      {/* Preset Grid */}
+      {/* Preset Grid - now with colors and icons */}
       <div className="flex flex-wrap gap-2">
-        {allPresets.map(preset => {
+        {presets.map(preset => {
           const isActive = isPresetActive(preset);
+          const color = preset.color || 'cyan';
+          const IconComp = ICONS[preset.icon || 'zap'] || Zap;
+          const colorClasses = getColorClasses(color, isActive);
+
           return (
-            <div
+            <button
               key={preset.id}
-              className={`group flex items-center gap-1 pr-1 rounded-lg border transition-all ${
-                isActive
-                  ? 'border-cyan-500 bg-cyan-500/20'
-                  : 'border-gray-700 hover:border-gray-600'
-              }`}
+              onClick={() => onApplyPreset(preset.query)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all mono text-xs font-medium ${colorClasses}`}
             >
-              <button
-                onClick={() => onApplyPreset(preset.query)}
-                className={`flex items-center gap-2 px-3 py-1.5 mono text-xs font-medium transition-colors ${
-                  isActive ? 'text-cyan-400' : 'text-gray-400 hover:text-gray-300'
-                }`}
-              >
-                {preset.isBuiltIn && <Zap className="h-3 w-3" strokeWidth={1.5} />}
-                {preset.name}
-              </button>
-              {!preset.isBuiltIn && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDeletePreset(preset.id); }}
-                  className="p-1 rounded text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                >
-                  <Trash2 className="h-3 w-3" strokeWidth={1.5} />
-                </button>
-              )}
-            </div>
+              <IconComp className="h-3.5 w-3.5" strokeWidth={1.5} />
+              {preset.name}
+            </button>
           );
         })}
       </div>
 
       {/* Preset Info */}
-      {allPresets.length === BUILT_IN_PRESETS.length && (
+      {presets.length === 0 && (
         <p className="text-xs text-gray-600 mono">
-          Save your current filters to create custom presets
+          Save your current filters to create presets
         </p>
       )}
     </div>

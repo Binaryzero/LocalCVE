@@ -2,7 +2,7 @@ import React from 'react';
 import { Check } from 'lucide-react';
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
-const CVSS_VERSIONS = ['3.1', '3.0', '2.0'] as const;
+const CVSS_VERSIONS = ['4.0', '3.1', '3.0', '2.0'] as const;
 
 type Severity = typeof SEVERITIES[number];
 type CvssVersion = typeof CVSS_VERSIONS[number];
@@ -242,6 +242,7 @@ export const matrixToQueryParams = (selection: SeverityMatrixSelection): Record<
 
   // Group by version
   const byVersion: Record<CvssVersion, Severity[]> = {
+    '4.0': [],
     '3.1': [],
     '3.0': [],
     '2.0': []
@@ -269,7 +270,7 @@ export const matrixToQueryParams = (selection: SeverityMatrixSelection): Record<
     });
 
     // Map version to query param name
-    const paramPrefix = version === '3.1' ? 'cvss31' : version === '3.0' ? 'cvss30' : 'cvss2';
+    const paramPrefix = version === '4.0' ? 'cvss40' : version === '3.1' ? 'cvss31' : version === '3.0' ? 'cvss30' : 'cvss2';
     params[`${paramPrefix}_min`] = overallMin.toString();
     // Note: We don't set max because the API doesn't support version-specific max filtering
   });
@@ -283,6 +284,7 @@ export const isSimpleQuery = (selection: SeverityMatrixSelection): boolean => {
   if (selection.selected.size === 0) return true;
 
   const byVersion: Record<CvssVersion, Set<Severity>> = {
+    '4.0': new Set(),
     '3.1': new Set(),
     '3.0': new Set(),
     '2.0': new Set()

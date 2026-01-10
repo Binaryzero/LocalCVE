@@ -1,4 +1,4 @@
-import { matchesQuery } from '../../src/lib/matcher.js';
+import { matchesQuery, getDateRangeFromRelative } from '../../src/lib/matcher.js';
 
 describe('Matcher Logic', () => {
     // Base CVE object for testing
@@ -307,5 +307,115 @@ describe('Matcher Logic', () => {
                 cvss31_min: 7.0
             })).toBe(true);
         });
+    });
+
+    describe('Relative date handling', () => {
+        // Helper to format date same way as the function (local time YYYY-MM-DD)
+        const formatLocalDate = (d: Date) => {
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        test('should use relative dates when published_relative is specified', () => {
+            // Create a CVE published recently (within last 7 days)
+            // Use local date format to match the comparison logic
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const recentCve = createCve({
+                published: formatLocalDate(yesterday)
+            });
+
+            // Create an old CVE
+            const oldCve = createCve({
+                published: '2020-01-15'
+            });
+
+            // With last_7_days relative filter, recent CVE matches, old one doesn't
+            expect(matchesQuery(recentCve, { published_relative: 'last_7_days' })).toBe(true);
+            expect(matchesQuery(oldCve, { published_relative: 'last_7_days' })).toBe(false);
+        });
+
+        test('should use relative dates when modified_relative is specified', () => {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const recentlyModified = createCve({
+                lastModified: formatLocalDate(yesterday)
+            });
+
+            expect(matchesQuery(recentlyModified, { modified_relative: 'last_7_days' })).toBe(true);
+            expect(matchesQuery(recentlyModified, { modified_relative: 'last_30_days' })).toBe(true);
+        });
+
+        test('should prefer relative dates over absolute dates', () => {
+            // Set a stale absolute date far in the past
+            const oldAbsoluteDate = '2020-01-01';
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const recentCve = createCve({
+                published: formatLocalDate(yesterday)
+            });
+
+            // Even with old absolute dates, relative should take precedence
+            expect(matchesQuery(recentCve, {
+                published_from: oldAbsoluteDate,
+                published_to: oldAbsoluteDate,
+                published_relative: 'last_7_days'
+            })).toBe(true);
+        });
+    });
+});
+
+describe('getDateRangeFromRelative', () => {
+    // Helper to format date same way as the function (local time)
+    const formatLocalDate = (d: Date) => {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
+    test('should return today for "today" preset', () => {
+        const result = getDateRangeFromRelative('today');
+        const today = formatLocalDate(new Date());
+        expect(result.from).toBe(today);
+        expect(result.to).toBeUndefined();
+    });
+
+    test('should return 7-day range for "last_7_days" preset', () => {
+        const result = getDateRangeFromRelative('last_7_days');
+        const today = new Date();
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+        expect(result.from).toBe(formatLocalDate(sevenDaysAgo));
+        expect(result.to).toBe(formatLocalDate(today));
+    });
+
+    test('should return 30-day range for "last_30_days" preset', () => {
+        const result = getDateRangeFromRelative('last_30_days');
+        const today = new Date();
+        const thirtyDaysAgo = new Date(today);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        expect(result.from).toBe(formatLocalDate(thirtyDaysAgo));
+        expect(result.to).toBe(formatLocalDate(today));
+    });
+
+    test('should return 90-day range for "last_90_days" preset', () => {
+        const result = getDateRangeFromRelative('last_90_days');
+        const today = new Date();
+        const ninetyDaysAgo = new Date(today);
+        ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+        expect(result.from).toBe(formatLocalDate(ninetyDaysAgo));
+        expect(result.to).toBe(formatLocalDate(today));
+    });
+
+    test('should return undefined for unknown preset', () => {
+        const result = getDateRangeFromRelative('invalid_preset');
+        expect(result.from).toBeUndefined();
+        expect(result.to).toBeUndefined();
     });
 });

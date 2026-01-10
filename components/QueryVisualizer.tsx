@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Shield, Calendar, AlertTriangle, TrendingUp, X } from 'lucide-react';
+import { Search, Shield, Calendar, AlertTriangle, TrendingUp, Building2, Package } from 'lucide-react';
 import { QueryModel } from '../types';
 
 interface QueryVisualizerProps {
@@ -90,49 +90,73 @@ const QueryVisualizer: React.FC<QueryVisualizerProps> = ({ query, onChipClick, c
     });
   }
 
-  // Date filters
-  if (query.published_from) {
+  // Date filters - prefer showing relative labels when available
+  if (query.published_relative) {
+    // Show the relative preset label instead of absolute dates
     chips.push({
-      id: 'published_from',
+      id: 'published_relative',
       label: 'Published',
-      value: `after ${formatDate(query.published_from)}`,
+      value: getRelativeLabel(query.published_relative),
       color: 'purple',
       icon: <Calendar className="h-3 w-3" strokeWidth={1.5} />,
-      filter: { published_from: query.published_from }
+      filter: { published_relative: query.published_relative }
     });
+  } else {
+    if (query.published_from) {
+      chips.push({
+        id: 'published_from',
+        label: 'Published',
+        value: `after ${formatDate(query.published_from)}`,
+        color: 'purple',
+        icon: <Calendar className="h-3 w-3" strokeWidth={1.5} />,
+        filter: { published_from: query.published_from }
+      });
+    }
+
+    if (query.published_to) {
+      chips.push({
+        id: 'published_to',
+        label: 'Published',
+        value: `before ${formatDate(query.published_to)}`,
+        color: 'purple',
+        icon: <Calendar className="h-3 w-3" strokeWidth={1.5} />,
+        filter: { published_to: query.published_to }
+      });
+    }
   }
 
-  if (query.published_to) {
+  if (query.modified_relative) {
+    // Show the relative preset label instead of absolute dates
     chips.push({
-      id: 'published_to',
-      label: 'Published',
-      value: `before ${formatDate(query.published_to)}`,
-      color: 'purple',
-      icon: <Calendar className="h-3 w-3" strokeWidth={1.5} />,
-      filter: { published_to: query.published_to }
-    });
-  }
-
-  if (query.modified_from) {
-    chips.push({
-      id: 'modified_from',
+      id: 'modified_relative',
       label: 'Modified',
-      value: `after ${formatDate(query.modified_from)}`,
+      value: getRelativeLabel(query.modified_relative),
       color: 'purple',
       icon: <Calendar className="h-3 w-3" strokeWidth={1.5} />,
-      filter: { modified_from: query.modified_from }
+      filter: { modified_relative: query.modified_relative }
     });
-  }
+  } else {
+    if (query.modified_from) {
+      chips.push({
+        id: 'modified_from',
+        label: 'Modified',
+        value: `after ${formatDate(query.modified_from)}`,
+        color: 'purple',
+        icon: <Calendar className="h-3 w-3" strokeWidth={1.5} />,
+        filter: { modified_from: query.modified_from }
+      });
+    }
 
-  if (query.modified_to) {
-    chips.push({
-      id: 'modified_to',
-      label: 'Modified',
-      value: `before ${formatDate(query.modified_to)}`,
-      color: 'purple',
-      icon: <Calendar className="h-3 w-3" strokeWidth={1.5} />,
-      filter: { modified_to: query.modified_to }
-    });
+    if (query.modified_to) {
+      chips.push({
+        id: 'modified_to',
+        label: 'Modified',
+        value: `before ${formatDate(query.modified_to)}`,
+        color: 'purple',
+        icon: <Calendar className="h-3 w-3" strokeWidth={1.5} />,
+        filter: { modified_to: query.modified_to }
+      });
+    }
   }
 
   // KEV flag
@@ -156,6 +180,34 @@ const QueryVisualizer: React.FC<QueryVisualizerProps> = ({ query, onChipClick, c
       color: 'yellow',
       icon: <TrendingUp className="h-3 w-3" strokeWidth={1.5} />,
       filter: { epss_min: query.epss_min }
+    });
+  }
+
+  // Vendors
+  if (query.vendors && query.vendors.length > 0) {
+    query.vendors.forEach((vendor, index) => {
+      chips.push({
+        id: `vendor_${index}`,
+        label: 'Vendor',
+        value: vendor,
+        color: 'cyan',
+        icon: <Building2 className="h-3 w-3" strokeWidth={1.5} />,
+        filter: { vendors: [vendor] }
+      });
+    });
+  }
+
+  // Products
+  if (query.products && query.products.length > 0) {
+    query.products.forEach((product, index) => {
+      chips.push({
+        id: `product_${index}`,
+        label: 'Product',
+        value: product,
+        color: 'purple',
+        icon: <Package className="h-3 w-3" strokeWidth={1.5} />,
+        filter: { products: [product] }
+      });
     });
   }
 
@@ -235,6 +287,16 @@ const formatDate = (dateStr: string): string => {
   });
 };
 
+// Helper to get human-readable label for relative date presets
+const getRelativeLabel = (relative: string): string => {
+  switch (relative) {
+    case 'today': return 'Today';
+    case 'last_7_days': return 'Last 7 Days';
+    case 'last_30_days': return 'Last 30 Days';
+    default: return relative;
+  }
+};
+
 // Human-readable query summary (for accessibility or tooltips)
 export const getQuerySummary = (query: QueryModel): string => {
   const parts: string[] = [];
@@ -265,6 +327,14 @@ export const getQuerySummary = (query: QueryModel): string => {
 
   if (query.epss_min !== undefined && query.epss_min > 0) {
     parts.push(`EPSS >= ${(query.epss_min * 100).toFixed(1)}%`);
+  }
+
+  if (query.vendors && query.vendors.length > 0) {
+    parts.push(`vendor: ${query.vendors.join(', ')}`);
+  }
+
+  if (query.products && query.products.length > 0) {
+    parts.push(`product: ${query.products.join(', ')}`);
   }
 
   return parts.length > 0 ? parts.join(' AND ') : 'All CVEs';

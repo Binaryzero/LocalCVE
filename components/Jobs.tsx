@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { RefreshCw, CheckCircle, XCircle, Clock, Terminal, StopCircle, ChevronDown, ChevronRight, Plus, RefreshCcw, Equal, AlertTriangle } from 'lucide-react';
+import { RefreshCw, CheckCircle, XCircle, Clock, Terminal, StopCircle, ChevronDown, ChevronRight, Plus, RefreshCcw, Equal, AlertTriangle, Zap, Link2 } from 'lucide-react';
 import { JobRun, JobLog } from '../types';
 
 interface JobsProps {
   jobs: JobRun[];
   onRunIngest: () => void;
   onRunBulkIngest?: () => void;
+  onRunCvssBtSync?: () => void;
+  onRunTrickestSync?: () => void;
 }
 
 interface StatusConfig {
@@ -17,7 +19,7 @@ interface StatusConfig {
   animate?: boolean;
 }
 
-const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest, onRunBulkIngest }) => {
+const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest, onRunBulkIngest, onRunCvssBtSync, onRunTrickestSync }) => {
   const isRunning = jobs.length > 0 && jobs[0].status === 'RUNNING';
   const [expandedJob, setExpandedJob] = useState<number | null>(null);
   const [jobLogs, setJobLogs] = useState<Map<number, JobLog[]>>(new Map());
@@ -198,6 +200,50 @@ const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest, onRunBulkIngest }) => {
               </span>
             </button>
           )}
+          {onRunCvssBtSync && (
+            <button
+              onClick={onRunCvssBtSync}
+              disabled={isRunning}
+              title="Sync CVSS-BT enrichment data: EPSS scores, exploit maturity, KEV status, and exploit source indicators."
+              className={`inline-flex items-center px-5 py-3 rounded-lg border transition-all ${
+                isRunning
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:border-purple-500'
+              }`}
+              style={{
+                background: isRunning ? 'rgba(168, 85, 247, 0.05)' : 'rgba(168, 85, 247, 0.1)',
+                borderColor: 'rgb(168, 85, 247)',
+                color: 'rgb(168, 85, 247)'
+              }}
+            >
+              <Zap className={`h-4 w-4 mr-2 ${isRunning ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
+              <span className="mono text-sm font-medium">
+                {isRunning ? 'SYNCING...' : 'SYNC CVSS-BT'}
+              </span>
+            </button>
+          )}
+          {onRunTrickestSync && (
+            <button
+              onClick={onRunTrickestSync}
+              disabled={isRunning}
+              title="Sync Trickest CVE exploit links: GitHub PoCs, ExploitDB, Metasploit, Nuclei templates, and more."
+              className={`inline-flex items-center px-5 py-3 rounded-lg border transition-all ${
+                isRunning
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:border-amber-500'
+              }`}
+              style={{
+                background: isRunning ? 'rgba(245, 158, 11, 0.05)' : 'rgba(245, 158, 11, 0.1)',
+                borderColor: 'rgb(245, 158, 11)',
+                color: 'rgb(245, 158, 11)'
+              }}
+            >
+              <Link2 className={`h-4 w-4 mr-2 ${isRunning ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
+              <span className="mono text-sm font-medium">
+                {isRunning ? 'SYNCING...' : 'SYNC TRICKEST'}
+              </span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -221,7 +267,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest, onRunBulkIngest }) => {
                   PROGRESS
                 </th>
                 <th className="px-4 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono bg-gray-900/30">
-                  CHANGES
+                  RESULTS
                 </th>
                 <th className="px-4 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider mono bg-gray-900/30">
                   DURATION
@@ -290,15 +336,15 @@ const Jobs: React.FC<JobsProps> = ({ jobs, onRunIngest, onRunBulkIngest }) => {
                         </div>
                       </td>
                       <td className="px-4 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-3 text-xs mono">
-                          <span className="flex items-center text-green-400" title="Added">
-                            <Plus className="w-3 h-3 mr-0.5" />{job.itemsAdded || 0}
+                        <div className="flex items-center gap-4 text-xs mono">
+                          <span className="flex items-center text-green-400" title="New CVEs added to database">
+                            <Plus className="w-3 h-3 mr-1" /><span className="text-green-500/70">ADD</span>&nbsp;{job.itemsAdded || 0}
                           </span>
-                          <span className="flex items-center text-yellow-400" title="Updated">
-                            <RefreshCcw className="w-3 h-3 mr-0.5" />{job.itemsUpdated || 0}
+                          <span className="flex items-center text-yellow-400" title="Existing CVEs with updated data">
+                            <RefreshCcw className="w-3 h-3 mr-1" /><span className="text-yellow-500/70">UPD</span>&nbsp;{job.itemsUpdated || 0}
                           </span>
-                          <span className="flex items-center text-gray-500" title="Unchanged">
-                            <Equal className="w-3 h-3 mr-0.5" />{job.itemsUnchanged || 0}
+                          <span className="flex items-center text-gray-500" title="CVEs unchanged since last sync">
+                            <Equal className="w-3 h-3 mr-1" /><span className="text-gray-600">SKIP</span>&nbsp;{job.itemsUnchanged || 0}
                           </span>
                         </div>
                       </td>

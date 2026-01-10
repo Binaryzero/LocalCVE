@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Bell, Check, Trash2, Calendar, AlertCircle, CheckCheck, Trash, Download, ChevronDown, ChevronRight, Layers, Clock, Square, CheckSquare, MinusSquare } from 'lucide-react';
+import { Bell, Check, Trash2, Calendar, AlertCircle, Download, ChevronDown, ChevronRight, Layers, Clock, Square, CheckSquare, MinusSquare } from 'lucide-react';
 import { Alert } from '../types';
 
 type GroupingMode = 'none' | 'watchlist' | 'date';
@@ -7,8 +7,10 @@ type GroupingMode = 'none' | 'watchlist' | 'date';
 interface AlertsProps {
   alerts: Alert[];
   onMarkRead: (id: string) => void;
+  onMarkUnread?: (id: string) => void;
   onDelete: (id: string) => void;
   onMarkAllRead?: () => void;
+  onMarkAllUnread?: () => void;
   onDeleteAll?: () => void;
   onViewCve?: (id: string) => void;
   onBulkMarkRead?: (ids: string[]) => void;
@@ -76,8 +78,10 @@ const groupAlerts = (alerts: Alert[], mode: GroupingMode): Map<string, Alert[]> 
 const Alerts: React.FC<AlertsProps> = ({
   alerts,
   onMarkRead,
+  onMarkUnread,
   onDelete,
   onMarkAllRead,
+  onMarkAllUnread,
   onDeleteAll,
   onViewCve,
   onBulkMarkRead,
@@ -149,6 +153,14 @@ const Alerts: React.FC<AlertsProps> = ({
   const someSelected = selectedIds.size > 0 && selectedIds.size < alerts.length;
 
   const selectedUnreadCount = alerts.filter(a => selectedIds.has(a.id) && !a.read).length;
+  const selectedReadCount = alerts.filter(a => selectedIds.has(a.id) && a.read).length;
+
+  const handleBulkMarkUnread = () => {
+    if (onMarkUnread) {
+      alerts.filter(a => selectedIds.has(a.id) && a.read).forEach(a => onMarkUnread(a.id));
+    }
+    setSelectedIds(new Set());
+  };
 
   return (
     <div className="space-y-6">
@@ -252,46 +264,6 @@ const Alerts: React.FC<AlertsProps> = ({
             </div>
           )}
 
-          {unreadCount > 0 && onMarkAllRead && (
-            <button
-              onClick={onMarkAllRead}
-              className="inline-flex items-center px-3 py-2 rounded-lg border transition-all hover:border-cyan-500 hover:bg-cyan-500/10"
-              style={{ borderColor: 'var(--cyber-border)' }}
-              title="Mark all as read"
-            >
-              <CheckCheck className="h-4 w-4 text-cyan-400 mr-2" strokeWidth={1.5} />
-              <span className="text-sm text-cyan-400 mono font-medium">MARK ALL READ</span>
-            </button>
-          )}
-          {alerts.length > 0 && onDeleteAll && (
-            showDeleteConfirm ? (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500 bg-red-500/10">
-                <span className="text-sm text-red-400 mono">Delete all?</span>
-                <button
-                  onClick={() => { onDeleteAll(); setShowDeleteConfirm(false); }}
-                  className="px-2 py-1 rounded bg-red-500 text-white text-xs mono font-medium hover:bg-red-600 transition-colors"
-                >
-                  YES
-                </button>
-                <button
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="px-2 py-1 rounded bg-gray-700 text-gray-300 text-xs mono font-medium hover:bg-gray-600 transition-colors"
-                >
-                  NO
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowDeleteConfirm(true)}
-                className="inline-flex items-center px-3 py-2 rounded-lg border transition-all hover:border-red-500 hover:bg-red-500/10"
-                style={{ borderColor: 'var(--cyber-border)' }}
-                title="Delete all alerts"
-              >
-                <Trash className="h-4 w-4 text-gray-400 mr-2" strokeWidth={1.5} />
-                <span className="text-sm text-gray-400 mono font-medium">DELETE ALL</span>
-              </button>
-            )
-          )}
         </div>
       </div>
 
@@ -312,6 +284,15 @@ const Alerts: React.FC<AlertsProps> = ({
             >
               <Check className="h-3.5 w-3.5 mr-1.5" strokeWidth={1.5} />
               MARK READ ({selectedUnreadCount})
+            </button>
+          )}
+          {selectedReadCount > 0 && onMarkUnread && (
+            <button
+              onClick={handleBulkMarkUnread}
+              className="inline-flex items-center px-3 py-1.5 rounded-lg border border-amber-500/50 bg-amber-500/10 text-amber-400 text-xs mono font-medium hover:bg-amber-500/20 transition-colors"
+            >
+              <Bell className="h-3.5 w-3.5 mr-1.5" strokeWidth={1.5} />
+              MARK UNREAD ({selectedReadCount})
             </button>
           )}
           {showBulkDeleteConfirm ? (
@@ -384,6 +365,7 @@ const Alerts: React.FC<AlertsProps> = ({
                   isSelected={selectedIds.has(alert.id)}
                   onToggleSelect={toggleSelect}
                   onMarkRead={onMarkRead}
+                  onMarkUnread={onMarkUnread}
                   onDelete={onDelete}
                   onViewCve={onViewCve}
                 />
@@ -426,6 +408,7 @@ const Alerts: React.FC<AlertsProps> = ({
                           isSelected={selectedIds.has(alert.id)}
                           onToggleSelect={toggleSelect}
                           onMarkRead={onMarkRead}
+                          onMarkUnread={onMarkUnread}
                           onDelete={onDelete}
                           onViewCve={onViewCve}
                         />
@@ -480,6 +463,7 @@ interface AlertRowProps {
   isSelected: boolean;
   onToggleSelect: (id: string) => void;
   onMarkRead: (id: string) => void;
+  onMarkUnread?: (id: string) => void;
   onDelete: (id: string) => void;
   onViewCve?: (id: string) => void;
 }
@@ -489,6 +473,7 @@ const AlertRow: React.FC<AlertRowProps> = ({
   isSelected,
   onToggleSelect,
   onMarkRead,
+  onMarkUnread,
   onDelete,
   onViewCve
 }) => {
@@ -561,7 +546,7 @@ const AlertRow: React.FC<AlertRowProps> = ({
 
         {/* Actions */}
         <div className="flex items-center space-x-2 ml-4">
-          {!alert.read && (
+          {!alert.read ? (
             <button
               onClick={() => onMarkRead(alert.id)}
               className="p-2.5 rounded-lg border transition-all hover:border-cyan-500 hover:bg-cyan-500/10"
@@ -569,6 +554,15 @@ const AlertRow: React.FC<AlertRowProps> = ({
               title="Mark as read"
             >
               <Check className="h-4 w-4 text-cyan-400" strokeWidth={1.5} />
+            </button>
+          ) : onMarkUnread && (
+            <button
+              onClick={() => onMarkUnread(alert.id)}
+              className="p-2.5 rounded-lg border transition-all hover:border-amber-500 hover:bg-amber-500/10"
+              style={{ borderColor: 'var(--cyber-border)' }}
+              title="Mark as unread"
+            >
+              <Bell className="h-4 w-4 text-gray-400 hover:text-amber-400 transition-colors" strokeWidth={1.5} />
             </button>
           )}
           <button

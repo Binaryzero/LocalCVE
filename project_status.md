@@ -1,10 +1,10 @@
 # LocalCVE - Project Status
 
 ## Project Overview
-**LocalCVE** is a local CVE (Common Vulnerabilities and Exposures) tracking application built with:
-- React 19.2.3 + Vite 6.2.0
-- TypeScript 5.8.2
-- SQLite database (better-sqlite3)
+**CVE Tracker** (formerly LocalCVE) is a local-first CVE (Common Vulnerabilities and Exposures) tracking application built with:
+- React 19 + Vite
+- TypeScript
+- SQLite database (better-sqlite3) with FTS5 full-text search
 - Recharts for data visualization
 - Playwright for E2E testing
 - Jest for unit testing
@@ -12,130 +12,181 @@
 ## Repository
 - **Remote**: https://github.com/Binaryzero/LocalCVE.git
 - **Branch**: main
-- **Status**: Merged with remote, ready to push
-- **Latest Commit**: da2ea2c (merge commit)
-- **Files**: 33 files (9,310 lines)
+- **Latest PR**: #4 (DuckDB Migration - now reverted to SQLite)
+
+## Current State (Jan 9, 2026)
+
+### Database
+- **Engine**: SQLite with better-sqlite3 (reverted from DuckDB)
+- **CVE Count**: 326,845
+- **Completeness**: 100%
+- **Status**: Healthy
+
+### Recent Session Summary
+CVE Navigation Improvements:
+1. **Collapsible REFERENCES** - Matches other collapsible sections in detail view
+2. **Prev/Next navigation** - Navigate between CVEs without returning to list, with keyboard shortcuts (Arrow keys, J/K, Escape)
+3. **Sticky list position** - Scroll position saved/restored when navigating, last-viewed CVE highlighted with cyan animation
+4. **Split pane layout** - Toggle button for side-by-side list + detail view, persisted to localStorage
+
+Previous session (Jan 9):
+1. **CVSS-BT enrichment** - EPSS scores, exploit maturity, threat intel source indicators
+2. **Trickest integration** - GitHub exploit PoC links and security advisories
+3. **Exploit badges** - Clickable badges with counts, scrollable exploit lists
+
+Earlier (Jan 8):
+UI polish and usability fixes:
+1. **Badge deduplication** - Alerts badge now shows only once (on icon when collapsed, at label when expanded)
+2. **Pulse animation removed** - No more pulsing dot on active menu items
+3. **Editable presets** - Filter presets can now be removed (including default ones)
+4. **Relative date presets** - Changed from "7D" to "Today", "Last 7 Days", "Last 30 Days"
+5. **Compact date filters** - Published and modified dates now side-by-side on same row
+6. **Modified filter fixed** - Was working but required server restart
+
+Previous sessions (same day):
+- **UI/UX improvements** - Full-width grid, alert badge, recently updated filter
+- **Data grid improvements** - Pagination, flexbox layout, server-side sorting
+- **CVE detail cleanup** - Removed versionType/defaultStatus from affected products
+- **CVSS 4.0 support** - Full CVSS 4.0 extraction, filtering, and display (16,473 CVEs updated)
+- **Job stats fix** - Final completion UPDATE now writes items_added/updated/unchanged
+- **CVSS scores showing N/A** - Added ADP metrics extraction (31,904 CVEs updated)
+
+### Key Features Working
+- Full-text search on CVE IDs and descriptions
+- CVSS filtering (min score, version-specific)
+- KEV (Known Exploited Vulnerabilities) filtering
+- Date range filtering
+- Vendor/product filtering
+- Alert generation from watchlists
+- Real-time ingestion with progress tracking
+- Bulk import mode for fast initial load
 
 ## Technology Stack
 
 ### Frontend
-- React 19.2.3
-- lucide-react 0.562.0 (icon library)
-- recharts 3.6.0 (charting)
+- React 19
+- lucide-react (icons)
+- recharts (charting)
+- @tanstack/react-virtual (virtual scrolling)
 
-### Backend/Data
-- better-sqlite3 11.8.1 (local database)
+### Backend
+- Node.js native HTTP server (no Express/Fastify)
+- better-sqlite3 with FTS5
+- SSE for real-time log streaming
 
 ### Development Tools
-- Vite 6.2.0 (build tool)
-- TypeScript 5.8.2
-- Jest 29.7.0 (unit testing)
-- Playwright 1.45.0 (E2E testing)
+- Vite (build tool)
+- TypeScript
+- Jest (unit testing)
+- Playwright (E2E testing)
 
-## MCP Integration
+## Running the Application
 
-### Enabled Servers (5)
-1. **context7** - Code documentation context
-2. **curl** - HTTP request tool
-3. **deepwiki** - GitHub repository documentation queries
-4. **github-official** - Official GitHub API integration (40 tools)
-5. **playwright** - Browser automation (22 tools)
+**IMPORTANT**: Always use `npm start` (sets NODE_ENV=production)
 
-### Available Tool Count
-- Total: 65+ tools across all servers
-- GitHub operations: 40 tools
-- Browser automation: 22 tools
-- Documentation: 3 tools
+```bash
+# Start production server (serves both API and static files)
+npm start
+
+# Access at http://127.0.0.1:17920
+```
+
+## Known Limitations
+- DuckDB migration abandoned due to Node.js binding instability
+- EPSS integration not yet implemented
+- Some server.test.ts tests disabled due to ESM/Jest compatibility
 
 ## Recent Changes
-- **2026-01-06 06:30**: Implemented Multi-Version CVSS Support and Enhanced Alert Generation
-  - Collect and store all CVSS versions (2.0, 3.0, 3.1) instead of just the best one
-  - Enhanced alert generation with deduplication and error handling
-  - Added version-specific CVSS filtering to API and matcher logic
-  - Updated TypeScript types to support all CVSS versions
-  - Created comprehensive unit tests for new functionality
-  - Created PR #2 with all changes
-  - All tests verified passing (5/5 unit, 3/3 E2E)
-- **2026-01-06 00:00**: Fixed KEV filter and table width issues
-  - Fixed KEV checkbox on CVE search page (was not functional)
-    - Added `kev` parameter to frontend API call ([App.tsx:46](App.tsx#L46))
-    - Added KEV filtering support to `/api/cves` endpoint ([server.js:101-103](src/server.js#L101-L103))
-  - Fixed table width causing horizontal scrolling
-    - Changed table from `min-w-full` to `table-fixed` with explicit column sizing
-    - Widened container from `max-w-5xl` to `max-w-7xl` for better space usage
-    - Added `break-words` to description column to prevent overflow
-    - Reduced padding from px-6 to px-4 for more compact layout
-  - All tests passing (1/1 unit, 3/3 E2E)
-  - Bundle size: 243.48KB (stable)
-- **2026-01-05 23:45**: Search-focused UI improvements and Alerts enhancements
-  - Refactored CVE/Threats screen to search-first design (like Google homepage)
-    - Only shows results when user actively searches (no default data display)
-    - Changed header from "THREAT DATABASE" to "CVE SEARCH"
-  - Improved CVSS filter with dual input system:
-    - Slider for quick whole-number selection (0-10, step=1)
-    - Text input for precise decimal values (0.1 precision)
-  - Fixed Alerts page limitations:
-    - Removed hard-coded 100 alert limit (now shows all alerts)
-    - Added KEV filtering support via API query parameters
-    - Added "Mark all read" bulk action button
-    - Added "Delete all" bulk action button with confirmation
-  - Updated API endpoints:
-    - `/api/alerts` now supports `?kev=true/false` and `?unread=true` query params
-    - Added `PUT /api/alerts/mark-all-read` endpoint
-    - Added `DELETE /api/alerts/delete-all` endpoint
-  - All tests updated and passing (1/1 unit, 3/3 E2E)
-  - Bundle size: 243KB (stable)
-- **2026-01-05 23:30**: UI cleanup - removed non-functional elements
-  - Removed all fake status indicators (ONLINE, MONITORING, LIVE, OK)
-  - Deleted Dashboard component with inaccurate statistics (based on 100 CVEs not full DB)
-  - Removed "Local Mode" and "LocalCVE" branding references
-  - Renamed application to "CVE Tracker" throughout UI
-  - Threats page is now the default landing page (not dashboard)
-  - Bundle size reduced from 587KB to 241KB (60% reduction)
-  - All tests updated and passing (1/1 unit, 3/3 E2E)
-- **2026-01-05 23:00**: Fixed production mode serving issue
-  - Server was running without NODE_ENV=production set properly
-  - Fixed by using `npm start` instead of manual NODE_ENV setting
-  - Now correctly serves built dist/ files instead of source files
-  - Browser no longer shows MIME type errors
-  - Application loads correctly in production mode
-- **2026-01-05 22:00**: Fixed critical ingestion bugs
-  - Fixed "no changes" false positive when database missing stored commit hash
-  - Added stored hash verification after git pull (not just when no changes)
-  - Fixed matcher.js null reference crash on CVE fields
-  - Full scan now running: 136k+ CVEs processed (ongoing)
-  - Unit tests verified: 1/1 passed
-  - Expected to reach ~240-250k CVEs when complete
-- **2026-01-05 15:45**: Migrated to single-server architecture for production
-  - Backend now serves static files from dist/ when NODE_ENV=production
-  - Added npm scripts: `npm start` (production), `npm run dev:backend` (dev)
-  - Created PRODUCTION.md with deployment guide
-  - Updated CLAUDE.md with single-server architecture details
-  - Maintains two-server dev mode for HMR (Vite + backend)
-  - Rebuilt better-sqlite3 for Node.js v25.2.1
-  - Verified production mode serves both API and frontend on port 17920
-- 2026-01-05 15:40: Created PR #1 to sync local updates to GitHub
-- 2026-01-05 15:35: Merged local main with origin/main (kept newer local code)
-- 2026-01-05 15:30: Connected to GitHub remote (Binaryzero/LocalCVE)
-- 2026-01-05 15:30: Initialized git repository with initial commit
-- 2026-01-05 15:30: Updated .gitignore to exclude database, CVE data, and working docs
-- 2026-01-05: Initialized MCP server discovery and configuration
-- 2026-01-05: Enabled github-official, playwright, and deepwiki servers
-- 2026-01-05: Configured GitHub authentication
-- 2026-01-05: Created CLAUDE.md with comprehensive development guide
-- 2026-01-05: Refactored TODO.md to focus on app-specific features
 
-## Current Milestone
-Core infrastructure complete. Focus on implementing critical missing features:
-- EPSS score integration
-- UI improvements (pagination, detail view)
-- Advanced filtering capabilities
+### 2026-01-08: UI Polish (Latest)
+- Badge fix: Alerts badge only shows once (on icon when collapsed, at label when expanded)
+- Removed pulse animation from active menu indicator
+- Filter presets: Now fully editable/removable (no locked built-in presets)
+- Date presets: Changed to relative labels ("Today", "Last 7 Days", "Last 30 Days")
+- Date filters: Combined published and modified onto same row (side-by-side)
+- Build verified (670KB), all 109 tests passing
 
-## Priority Features
-1. **EPSS Integration**: Implement EPSS score fetching and display
-2. **Advanced Filtering**: Add date range and vendor/product filtering
-3. **UI Enhancements**: Improve display of multi-version CVSS data
+### 2026-01-08: UI/UX Improvements
+- Full-width grid: Removed max-w-7xl constraint from Layout.tsx
+- Watchlist edit: Added modified date range, vendors, products fields
+- Alert indicator: Added unread count badge to navigation with 99+ overflow handling
+- Recently updated filter: Added modified_from/modified_to API parameters
+- CVE detail cleanup: Removed versionType/defaultStatus from affected products
+- Build verified (671KB), all 109 tests passing
 
-## Known Issues
-- Pagination limited to 100 items on frontend
-- Search is currently client-side only
+### 2026-01-08: Data Grid Improvements
+- Fixed pagination visibility (shows only when results exist and search is active)
+- Restructured grid container with flexbox for responsive height
+- Pagination now inside flex container (no scrolling up needed)
+- Added server-side column sorting:
+  - Sortable columns: CVE ID, Severity, Published
+  - Click header to sort, click again to toggle direction
+  - Up/down chevron indicates sort direction
+  - Server-side sorting ensures consistency across pages
+- Build verified (667KB), all 109 tests passing
+
+### 2026-01-08: UI Improvements & Test Fixes
+- Verified all UI improvements from previous session are complete:
+  - Date input calendar visibility (cyan-tinted icons on dark background)
+  - Collapsible sidebar with localStorage persistence
+  - CVE list flex height (`calc(100vh - 420px)`)
+  - Improved pagination with page numbers and first/last buttons
+- Fixed test parameter syntax for SQLite compatibility:
+  - Changed `$1, $2, $3` (DuckDB style) to `?` (SQLite style)
+  - Fixed `RETURNING id` to use `lastID` from run result
+  - Updated version priority test expectation (v3.1 > v3.0)
+- All 109 unit tests passing
+
+### 2026-01-08: CVSS 4.0 Support & Job Stats Fix
+- Added full CVSS 4.0 extraction from CNA and ADP containers
+- Added CVSS 4.0 filtering via cvss40_min API parameter
+- Added CVSS 4.0 display in CvssVersionTabs with vector breakdown
+- Added CVSS 4.0 column to SeverityMatrix filter
+- Fixed job completion stats not persisting (items_added/updated/unchanged showed 0)
+- Fixed stale log message "DuckDB FTS extension" → "FTS5 index rebuilt"
+- Full re-ingestion updated 16,473 CVEs with CVSS 4.0 metrics
+
+### 2026-01-08: DuckDB to SQLite Reversion
+- Reverted from DuckDB to SQLite due to segfault crashes
+- Added ADP metrics extraction for CVSS scores
+- Fixed search parameter binding bug
+- Fixed KEV filter comparison
+- Full re-ingestion completed with 31,904 CVE updates
+
+### 2026-01-08: DuckDB Migration (later reverted)
+- Attempted migration to DuckDB for analytical performance
+- Encountered stability issues with large datasets
+- Decision made to revert to battle-tested SQLite
+
+### 2026-01-07: CVE Detail Enhancements
+- Added CWE, CAPEC, SSVC data extraction
+- Added workarounds and solutions sections
+- Made affected products clickable for filtering
+- Expanded version information display
+
+## Files Modified This Session
+- `App.tsx` - Layout mode state, toggle handler, split pane grid layout
+- `components/CveList.tsx` - Layout toggle button, scroll position restoration, highlight animation, compact split mode columns
+- `components/CveDetail.tsx` - showBackButton prop for split mode, collapsible REFERENCES
+- `index.html` - highlight-fade keyframe animation
+- `TODO.md` - Session updates
+- `project_status.md` - Session updates
+
+## Recent Changes
+
+### 2026-01-09: CVE Navigation Improvements (Latest)
+- Made REFERENCES section collapsible (matches other sections)
+- Added Prev/Next CVE navigation with keyboard shortcuts (Arrow keys, J/K, Escape)
+- Added sticky list position with scroll restoration and highlight animation
+- Added split pane layout with toggle button and localStorage persistence
+- Build verified (372KB), 139 tests passing
+
+### 2026-01-09: CVSS-BT & Trickest Integration
+- Added CVSS-BT enrichment (EPSS scores, exploit maturity, threat intel sources)
+- Added Trickest PoC links integration
+- Clickable exploit badges with counts
+- Scrollable exploit lists with gradient indicators
+
+## Next Steps
+1. Document watchlist query syntax
+2. Create user guide for alert setup
