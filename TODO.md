@@ -688,6 +688,34 @@ Direct links to exploit code repositories and security advisories.
   - ✓ Added alert generation and deduplication tests
   - ✓ Added FTS5 search operation tests
 
+## Security Compliance
+
+### CodeGuard Security Review (Jan 9, 2026) - COMPLETED
+Full audit against 22 CodeGuard instruction files:
+
+**COMPLIANT:**
+- Input validation and injection prevention (SQL parameterization, FTS5 escaping, body size limits)
+- OS command injection (git commands use hardcoded URLs, spawnSync with structured args)
+- Path traversal protection (path.resolve + directory containment check)
+- Rate limiting (200 req/min per IP)
+- Security headers (CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy)
+- XSS protection (React auto-escaping, no raw HTML insertion)
+- Cryptography (SHA-256 correctly implemented)
+- No hardcoded credentials in source
+- Supply chain (package-lock.json and bun.lock present)
+- Error handling (does not leak sensitive info)
+- Logging (structured, sanitized)
+
+**FIXED:**
+- Removed API key exposure from vite.config.ts (was exposing GEMINI_API_KEY to client bundle)
+- Changed dev server host from 0.0.0.0 to localhost (prevents LAN exposure)
+- Added security comments for CDN usage (documented dev-only pattern)
+
+**ACCEPTABLE FOR LOCAL-FIRST APP:**
+- CORS set to '*' (server only listens on 127.0.0.1)
+- No authentication (local-first single-user app)
+- CDN scripts in dev mode (production build is self-contained)
+
 ## Documentation
 - [ ] Document watchlist query syntax
 - ✓ Add API endpoint documentation (in README.md)

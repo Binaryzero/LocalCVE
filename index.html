@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CVE Tracker</title>
+    <!--
+      Security note (codeguard-0-supply-chain-security):
+      - This file is for DEVELOPMENT only - CDN scripts don't support SRI with dynamic/versioned URLs
+      - For PRODUCTION: Run `npm run build` which compiles Tailwind locally and bundles all
+        dependencies, eliminating CDN dependency and enabling proper SRI verification
+      - The built version in dist/ doesn't load any external scripts
+    -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
