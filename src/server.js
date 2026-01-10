@@ -4,6 +4,8 @@ import path from 'node:path';
 import { URL } from 'node:url';
 import getDb, { initPromise } from './lib/db.js';
 import * as nvd from './lib/ingest/nvd.js';
+import * as cvssbt from './lib/ingest/cvssbt.js';
+import * as trickest from './lib/ingest/trickest.js';
 
 // Wait for database to be ready
 let db;
@@ -21,12 +23,23 @@ const PORT = process.env.PORT || 17920;
 const bigIntReplacer = (key, value) =>
   typeof value === 'bigint' ? Number(value) : value;
 
+// Security headers for all responses (per codeguard-0-client-side-web-security)
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'X-XSS-Protection': '0', // Disabled per modern best practice (CSP is the defense)
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+  // CSP is set separately for HTML vs API responses
+};
+
 const sendJson = (res, data, status = 200) => {
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
     'Pragma': 'no-cache',
-    'Expires': '0'
+    'Expires': '0',
+    ...SECURITY_HEADERS
   });
   res.end(JSON.stringify(data, bigIntReplacer));
 };
@@ -34,7 +47,8 @@ const sendJson = (res, data, status = 200) => {
 const sendError = (res, message, status = 500) => {
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    ...SECURITY_HEADERS
   });
   res.end(JSON.stringify({ error: message }));
 };
@@ -47,6 +61,48 @@ const MIN_LIMIT = 1;
 const DEFAULT_LIMIT = 100;
 const VALID_SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const MAX_WATCHLIST_NAME_LENGTH = 255;
+
+// Rate limiting (per codeguard-0-api-web-services and codeguard-0-framework-and-languages Node.js section)
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
+const RATE_LIMIT_MAX_REQUESTS = 200; // Max requests per window per IP
+const rateLimitMap = new Map(); // IP -> { count, resetTime }
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const record = rateLimitMap.get(ip);
+
+  if (!record || now > record.resetTime) {
+    // New window
+    rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
+    return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - 1 };
+  }
+
+  if (record.count >= RATE_LIMIT_MAX_REQUESTS) {
+    return { allowed: false, remaining: 0, retryAfter: Math.ceil((record.resetTime - now) / 1000) };
+  }
+
+  record.count++;
+  return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - record.count };
+}
+
+// Periodically clean up old rate limit entries (every 5 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of rateLimitMap) {
+    if (now > record.resetTime) {
+      rateLimitMap.delete(ip);
+    }
+  }
+}, 5 * 60 * 1000);
+
+// Escape special characters in LIKE patterns (per codeguard-0-input-validation-injection)
+// SQLite LIKE uses % and _ as wildcards; escape them to match literally
+function escapeLikePattern(str) {
+  return str
+    .replace(/\\/g, '\\\\')  // Escape backslash first
+    .replace(/%/g, '\\%')    // Escape percent
+    .replace(/_/g, '\\_');   // Escape underscore
+}
 
 // Validation helper for watchlist body
 const validateWatchlistBody = (body) => {
@@ -91,6 +147,8 @@ const readBody = (req) => new Promise((resolve, reject) => {
 });
 
 async function handleRequest(req, res) {
+  // CORS headers - restrict to same origin in production, allow all in dev
+  // For local-first single-user app, this is acceptable
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -99,6 +157,19 @@ async function handleRequest(req, res) {
     res.writeHead(204);
     res.end();
     return;
+  }
+
+  // Rate limiting (per codeguard-0-api-web-services)
+  const clientIp = req.socket.remoteAddress || 'unknown';
+  const rateLimit = checkRateLimit(clientIp);
+
+  // Add rate limit headers to all responses
+  res.setHeader('X-RateLimit-Limit', RATE_LIMIT_MAX_REQUESTS.toString());
+  res.setHeader('X-RateLimit-Remaining', rateLimit.remaining.toString());
+
+  if (!rateLimit.allowed) {
+    res.setHeader('Retry-After', rateLimit.retryAfter.toString());
+    return sendError(res, 'Too many requests. Please try again later.', 429);
   }
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -131,6 +202,30 @@ async function handleRequest(req, res) {
       } catch (e) {
         console.error("Failed to start bulk ingestion job:", e);
         return sendError(res, 'Failed to start bulk ingestion job: ' + e.message, 500);
+      }
+    }
+
+    // CVSS-BT enrichment sync (EPSS, exploit maturity, threat intel)
+    if (req.method === 'POST' && pathname === '/api/ingest/cvss-bt') {
+      console.log('[API] Starting CVSS-BT enrichment sync...');
+      try {
+        const jobId = await cvssbt.run();
+        return sendJson(res, { status: 'CVSS-BT enrichment started', jobId }, 202);
+      } catch (e) {
+        console.error("Failed to start CVSS-BT sync:", e);
+        return sendError(res, 'Failed to start CVSS-BT sync: ' + e.message, 500);
+      }
+    }
+
+    // Trickest CVE exploit links sync
+    if (req.method === 'POST' && pathname === '/api/ingest/trickest') {
+      console.log('[API] Starting Trickest exploit links sync...');
+      try {
+        const jobId = await trickest.run();
+        return sendJson(res, { status: 'Trickest sync started', jobId }, 202);
+      } catch (e) {
+        console.error("Failed to start Trickest sync:", e);
+        return sendError(res, 'Failed to start Trickest sync: ' + e.message, 500);
       }
     }
 
@@ -170,14 +265,16 @@ async function handleRequest(req, res) {
       const cvss2MinRaw = parseFloat(url.searchParams.get('cvss2_min'));
       const cvss30MinRaw = parseFloat(url.searchParams.get('cvss30_min'));
       const cvss31MinRaw = parseFloat(url.searchParams.get('cvss31_min'));
+      const cvss40MinRaw = parseFloat(url.searchParams.get('cvss40_min'));
 
       const cvssMin = validateCvss(cvssMinRaw, 'cvss_min');
       const cvss2Min = validateCvss(cvss2MinRaw, 'cvss2_min');
       const cvss30Min = validateCvss(cvss30MinRaw, 'cvss30_min');
       const cvss31Min = validateCvss(cvss31MinRaw, 'cvss31_min');
+      const cvss40Min = validateCvss(cvss40MinRaw, 'cvss40_min');
 
       // Check for validation errors
-      for (const val of [cvssMin, cvss2Min, cvss30Min, cvss31Min]) {
+      for (const val of [cvssMin, cvss2Min, cvss30Min, cvss31Min, cvss40Min]) {
         if (val && val.error) {
           return sendError(res, val.error, 400);
         }
@@ -185,13 +282,69 @@ async function handleRequest(req, res) {
 
       const kev = url.searchParams.get('kev');
 
-      // Date range filtering
-      const publishedFrom = url.searchParams.get('published_from');
-      const publishedTo = url.searchParams.get('published_to');
+      // Date range filtering - support both absolute and relative dates
+      const publishedRelative = url.searchParams.get('published_relative');
+      const modifiedRelative = url.searchParams.get('modified_relative');
+
+      // Helper to convert relative date presets to absolute ranges
+      const getDateRangeFromRelative = (relativePeriod) => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = today.toISOString().split('T')[0];
+        switch (relativePeriod) {
+          case 'today':
+            return { from: todayStr, to: undefined };
+          case 'last_7_days': {
+            const from = new Date(today);
+            from.setDate(from.getDate() - 7);
+            return { from: from.toISOString().split('T')[0], to: todayStr };
+          }
+          case 'last_30_days': {
+            const from = new Date(today);
+            from.setDate(from.getDate() - 30);
+            return { from: from.toISOString().split('T')[0], to: todayStr };
+          }
+          case 'last_90_days': {
+            const from = new Date(today);
+            from.setDate(from.getDate() - 90);
+            return { from: from.toISOString().split('T')[0], to: todayStr };
+          }
+          default:
+            return { from: undefined, to: undefined };
+        }
+      };
+
+      // Resolve dates - relative takes precedence over absolute
+      let publishedFrom = url.searchParams.get('published_from');
+      let publishedTo = url.searchParams.get('published_to');
+      let modifiedFrom = url.searchParams.get('modified_from');
+      let modifiedTo = url.searchParams.get('modified_to');
+
+      if (publishedRelative) {
+        const range = getDateRangeFromRelative(publishedRelative);
+        publishedFrom = range.from;
+        publishedTo = range.to;
+      }
+      if (modifiedRelative) {
+        const range = getDateRangeFromRelative(modifiedRelative);
+        modifiedFrom = range.from;
+        modifiedTo = range.to;
+      }
 
       // Vendor/product filtering
       const vendorsParam = url.searchParams.get('vendors');
       const productsParam = url.searchParams.get('products');
+
+      // CVE status filtering (hide rejected/disputed)
+      const hideRejected = url.searchParams.get('hide_rejected') === 'true';
+      const hideDisputed = url.searchParams.get('hide_disputed') === 'true';
+
+      // EPSS and exploit maturity filtering (from cve_temporal table)
+      const epssMinRaw = parseFloat(url.searchParams.get('epss_min'));
+      const epssMin = !isNaN(epssMinRaw) && epssMinRaw >= 0 && epssMinRaw <= 1 ? epssMinRaw : null;
+      const exploitMaturity = url.searchParams.get('exploit_maturity');
+      const validMaturityValues = ['A', 'H', 'F', 'POC', 'U'];
+      const safeExploitMaturity = validMaturityValues.includes(exploitMaturity) ? exploitMaturity : null;
 
       // Parse comma-separated vendors/products
       const vendors = vendorsParam ? vendorsParam.split(',').map(v => v.trim()).filter(v => v) : [];
@@ -204,6 +357,13 @@ async function handleRequest(req, res) {
       if (products.length > 50) {
         return sendError(res, 'Too many products (max 50)', 400);
       }
+
+      // Parse and validate sort parameters
+      const sortByParam = url.searchParams.get('sort_by') || 'published';
+      const sortOrderParam = url.searchParams.get('sort_order') || 'desc';
+      const validSortColumns = ['id', 'score', 'published'];
+      const safeSortBy = validSortColumns.includes(sortByParam) ? sortByParam : 'published';
+      const safeSortOrder = sortOrderParam === 'asc' ? 'ASC' : 'DESC';
 
       // Validate date format (ISO date string YYYY-MM-DD)
       const isValidDate = (dateStr) => {
@@ -225,24 +385,50 @@ async function handleRequest(req, res) {
       let paramIndex = 1;
 
       if (search) {
-        // Search using ILIKE on CVE ID and description
-        where.push(`(c.id ILIKE $${paramIndex} OR c.description ILIKE $${paramIndex})`);
-        const searchTerm = '%' + search.trim() + '%';
-        params.push(searchTerm);
-        paramIndex++;
+        // Search using LIKE on CVE ID and description
+        // Escape special LIKE characters to prevent wildcard injection
+        where.push(`(c.id LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\')`);
+        const escapedSearch = escapeLikePattern(search.trim());
+        const searchTerm = '%' + escapedSearch + '%';
+        params.push(searchTerm, searchTerm);  // Push twice for both placeholders
+        paramIndex += 2;
       }
 
       // Handle filtering by severity
       if (severity) {
-        where.push(`c.id IN (SELECT cve_id FROM metrics WHERE severity = $${paramIndex})`);
+        where.push(`c.id IN (SELECT cve_id FROM metrics WHERE severity = ?)`);
         params.push(severity); // Already uppercased during validation
         paramIndex++;
       }
 
-      // General CVSS min filter: use MAX score to match UI display behavior
-      // UI shows highest score across versions, so filter should match on highest
+      // Filter out rejected/disputed CVEs based on user settings
+      // CVE 5.0 format uses uppercase state values: PUBLISHED, REJECTED, DISPUTED
+      if (hideRejected) {
+        where.push(`(c.vuln_status IS NULL OR c.vuln_status != 'REJECTED')`);
+      }
+      if (hideDisputed) {
+        where.push(`(c.vuln_status IS NULL OR c.vuln_status != 'DISPUTED')`);
+      }
+
+      // General CVSS min filter: use version priority (4.0 > 3.1 > 3.0 > 2.0)
+      // Uses MAX score per version to handle duplicates (CNA vs ADP assessments)
       if (cvssMin) {
-        where.push(`c.id IN (SELECT cve_id FROM metrics GROUP BY cve_id HAVING MAX(score) >= $${paramIndex})`);
+        where.push(`c.id IN (
+          SELECT m1.cve_id FROM metrics m1
+          WHERE m1.cvss_version = (
+            SELECT m2.cvss_version FROM metrics m2
+            WHERE m2.cve_id = m1.cve_id
+            ORDER BY CASE m2.cvss_version
+              WHEN '4.0' THEN 1
+              WHEN '3.1' THEN 2
+              WHEN '3.0' THEN 3
+              WHEN '2.0' THEN 4
+            END
+            LIMIT 1
+          )
+          GROUP BY m1.cve_id
+          HAVING MAX(m1.score) >= ?
+        )`);
         params.push(cvssMin);
         paramIndex++;
       }
@@ -250,18 +436,23 @@ async function handleRequest(req, res) {
       // Version-specific CVSS filtering (filters on specific version's score)
       const versionConditions = [];
       if (cvss2Min) {
-        versionConditions.push(`(cvss_version = $${paramIndex} AND score >= $${paramIndex + 1})`);
+        versionConditions.push(`(cvss_version = ? AND score >= ?)`);
         params.push('2.0', cvss2Min);
         paramIndex += 2;
       }
       if (cvss30Min) {
-        versionConditions.push(`(cvss_version = $${paramIndex} AND score >= $${paramIndex + 1})`);
+        versionConditions.push(`(cvss_version = ? AND score >= ?)`);
         params.push('3.0', cvss30Min);
         paramIndex += 2;
       }
       if (cvss31Min) {
-        versionConditions.push(`(cvss_version = $${paramIndex} AND score >= $${paramIndex + 1})`);
+        versionConditions.push(`(cvss_version = ? AND score >= ?)`);
         params.push('3.1', cvss31Min);
+        paramIndex += 2;
+      }
+      if (cvss40Min) {
+        versionConditions.push(`(cvss_version = ? AND score >= ?)`);
+        params.push('4.0', cvss40Min);
         paramIndex += 2;
       }
 
@@ -271,25 +462,51 @@ async function handleRequest(req, res) {
 
       // KEV filtering - check for 'true', '1', or 1 (JSON values can vary)
       if (kev === 'true') {
-        where.push("(json_extract_string(c.json, '$.kev') = 'true' OR json_extract_string(c.json, '$.kev') = '1')");
+        where.push("json_extract(c.json, '$.kev') = 1");
       }
 
-      // Date range filtering
+      // EPSS filtering (from cve_temporal table)
+      if (epssMin !== null) {
+        where.push(`c.id IN (SELECT cve_id FROM cve_temporal WHERE epss >= ?)`);
+        params.push(epssMin);
+        paramIndex++;
+      }
+
+      // Exploit maturity filtering (from cve_temporal table)
+      if (safeExploitMaturity) {
+        where.push(`c.id IN (SELECT cve_id FROM cve_temporal WHERE exploit_maturity = ?)`);
+        params.push(safeExploitMaturity);
+        paramIndex++;
+      }
+
+      // Date range filtering (published)
       if (publishedFrom && isValidDate(publishedFrom)) {
-        where.push(`c.published >= $${paramIndex}`);
+        where.push(`c.published >= ?`);
         params.push(publishedFrom + 'T00:00:00.000Z');
         paramIndex++;
       }
       if (publishedTo && isValidDate(publishedTo)) {
-        where.push(`c.published <= $${paramIndex}`);
+        where.push(`c.published <= ?`);
         params.push(publishedTo + 'T23:59:59.999Z');
+        paramIndex++;
+      }
+
+      // Date range filtering (modified)
+      if (modifiedFrom && isValidDate(modifiedFrom)) {
+        where.push(`c.last_modified >= ?`);
+        params.push(modifiedFrom + 'T00:00:00.000Z');
+        paramIndex++;
+      }
+      if (modifiedTo && isValidDate(modifiedTo)) {
+        where.push(`c.last_modified <= ?`);
+        params.push(modifiedTo + 'T23:59:59.999Z');
         paramIndex++;
       }
 
       // Vendor filtering (OR logic within vendors) - uses denormalized cve_products table
       if (vendors.length > 0) {
         const vendorPlaceholders = vendors.map(() => {
-          const placeholder = `cp.vendor = $${paramIndex}`;
+          const placeholder = `cp.vendor = ?`;
           paramIndex++;
           return placeholder;
         }).join(' OR ');
@@ -300,7 +517,7 @@ async function handleRequest(req, res) {
       // Product filtering (OR logic within products) - uses denormalized cve_products table
       if (products.length > 0) {
         const productPlaceholders = products.map(() => {
-          const placeholder = `cp.product = $${paramIndex}`;
+          const placeholder = `cp.product = ?`;
           paramIndex++;
           return placeholder;
         }).join(' OR ');
@@ -312,7 +529,28 @@ async function handleRequest(req, res) {
         query += ` WHERE ` + where.join(' AND ');
       }
 
-      query += ` ORDER BY c.published DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1} `;
+      // Build ORDER BY clause based on sort parameters
+      let orderClause;
+      switch (safeSortBy) {
+        case 'id':
+          orderClause = `ORDER BY c.id ${safeSortOrder}`;
+          break;
+        case 'score':
+          // Sort by highest CVSS score using version priority (4.0 > 3.1 > 3.0 > 2.0)
+          orderClause = `ORDER BY COALESCE(
+            (SELECT MAX(score) FROM metrics WHERE cve_id = c.id AND cvss_version = '4.0'),
+            (SELECT MAX(score) FROM metrics WHERE cve_id = c.id AND cvss_version = '3.1'),
+            (SELECT MAX(score) FROM metrics WHERE cve_id = c.id AND cvss_version = '3.0'),
+            (SELECT MAX(score) FROM metrics WHERE cve_id = c.id AND cvss_version = '2.0'),
+            0
+          ) ${safeSortOrder}`;
+          break;
+        case 'published':
+        default:
+          orderClause = `ORDER BY c.published ${safeSortOrder}`;
+      }
+
+      query += ` ${orderClause} LIMIT ? OFFSET ? `;
       params.push(limit, offset);
 
       const rows = await db.all(query, ...params);
@@ -327,7 +565,7 @@ async function handleRequest(req, res) {
       const metricsMap = new Map();
       if (cveIds.length > 0) {
         // Create placeholders for the IN clause (DuckDB uses $N)
-        const placeholders = cveIds.map((_, i) => `$${i + 1}`).join(',');
+        const placeholders = cveIds.map((_, i) => `?`).join(',');
         const metricsQuery = `SELECT cve_id, cvss_version, score, severity, vector_string FROM metrics WHERE cve_id IN (${placeholders})`;
         const metricsRows = await db.all(metricsQuery, ...cveIds);
 
@@ -344,35 +582,72 @@ async function handleRequest(req, res) {
         const data = JSON.parse(r.json);
         const cveMetrics = metricsMap.get(data.id) || [];
 
-        // Extract version-specific metrics
+        // Extract version-specific metrics (use MAX score if multiple exist for same version)
         let cvss2Score = null, cvss2Severity = null;
         let cvss30Score = null, cvss30Severity = null;
         let cvss31Score = null, cvss31Severity = null;
+        let cvss40Score = null, cvss40Severity = null;
 
         for (const metric of cveMetrics) {
           switch (metric.cvss_version) {
             case '2.0':
-              cvss2Score = metric.score;
-              cvss2Severity = metric.severity;
+              if (cvss2Score === null || metric.score > cvss2Score) {
+                cvss2Score = metric.score;
+                cvss2Severity = metric.severity;
+              }
               break;
             case '3.0':
-              cvss30Score = metric.score;
-              cvss30Severity = metric.severity;
+              if (cvss30Score === null || metric.score > cvss30Score) {
+                cvss30Score = metric.score;
+                cvss30Severity = metric.severity;
+              }
               break;
             case '3.1':
-              cvss31Score = metric.score;
-              cvss31Severity = metric.severity;
+              if (cvss31Score === null || metric.score > cvss31Score) {
+                cvss31Score = metric.score;
+                cvss31Severity = metric.severity;
+              }
+              break;
+            case '4.0':
+              if (cvss40Score === null || metric.score > cvss40Score) {
+                cvss40Score = metric.score;
+                cvss40Severity = metric.severity;
+              }
               break;
           }
+        }
+
+        // Calculate primary score using version priority (4.0 > 3.1 > 3.0 > 2.0)
+        // Newer CVSS versions are more accurate and have proper severity labels
+        let primaryScore = null;
+        let primarySeverity = null;
+        let primaryVersion = null;
+
+        if (cvss40Score !== null) {
+          primaryScore = cvss40Score;
+          primarySeverity = cvss40Severity;
+          primaryVersion = '4.0';
+        } else if (cvss31Score !== null) {
+          primaryScore = cvss31Score;
+          primarySeverity = cvss31Severity;
+          primaryVersion = '3.1';
+        } else if (cvss30Score !== null) {
+          primaryScore = cvss30Score;
+          primarySeverity = cvss30Severity;
+          primaryVersion = '3.0';
+        } else if (cvss2Score !== null) {
+          primaryScore = cvss2Score;
+          primarySeverity = cvss2Severity;
+          primaryVersion = '2.0';
         }
 
         return {
           id: data.id,
           description: data.description,
-          // Primary score for backward compatibility
-          cvssScore: data.score,
-          cvssSeverity: data.severity,
-          cvssVersion: data.cvssVersion,
+          // Primary score from metrics table (matches filter behavior)
+          cvssScore: primaryScore,
+          cvssSeverity: primarySeverity,
+          cvssVersion: primaryVersion,
           // Version-specific scores
           cvss2Score,
           cvss2Severity,
@@ -380,6 +655,8 @@ async function handleRequest(req, res) {
           cvss30Severity,
           cvss31Score,
           cvss31Severity,
+          cvss40Score,
+          cvss40Severity,
           published: data.published,
           lastModified: data.lastModified,
           epssScore: null,
@@ -395,17 +672,17 @@ async function handleRequest(req, res) {
     const cveMatch = pathname.match(/^\/api\/cves\/(CVE-\d+-\d+)$/);
     if (req.method === 'GET' && cveMatch) {
       const id = cveMatch[1];
-      const row = await db.get('SELECT json, title, source_advisory FROM cves WHERE id = $1', id);
+      const row = await db.get('SELECT json, title, source_advisory FROM cves WHERE id = ?', id);
       if (!row) return sendJson(res, { error: 'Not found' }, 404);
 
       // Get all metrics for this CVE (single source of truth for CVSS data)
-      const metricsRows = await db.all('SELECT cvss_version, score, severity, vector_string FROM metrics WHERE cve_id = $1', id);
+      const metricsRows = await db.all('SELECT cvss_version, score, severity, vector_string FROM metrics WHERE cve_id = ?', id);
 
       // Parse the base CVE data
       const cveData = JSON.parse(row.json);
 
       // Get affected products from configs table (includes version details)
-      const configsRow = await db.get('SELECT nodes FROM configs WHERE cve_id = $1', id);
+      const configsRow = await db.get('SELECT nodes FROM configs WHERE cve_id = ?', id);
       let affectedProducts = [];
       if (configsRow && configsRow.nodes) {
         try {
@@ -428,33 +705,77 @@ async function handleRequest(req, res) {
       }
 
       // Get CWE classifications
-      const cwes = await db.all('SELECT cwe_id, description FROM cve_cwes WHERE cve_id = $1', id);
+      const cwes = await db.all('SELECT cwe_id, description FROM cve_cwes WHERE cve_id = ?', id);
 
       // Get CAPEC attack patterns
-      const capecs = await db.all('SELECT capec_id, description FROM cve_capec WHERE cve_id = $1', id);
+      const capecs = await db.all('SELECT capec_id, description FROM cve_capec WHERE cve_id = ?', id);
 
       // Get SSVC scores (CISA prioritization)
-      const ssvc = await db.all('SELECT exploitation, automatable, technical_impact, provider FROM cve_ssvc WHERE cve_id = $1', id);
+      const ssvc = await db.all('SELECT exploitation, automatable, technical_impact, provider FROM cve_ssvc WHERE cve_id = ?', id);
 
       // Get references with tags
-      const referencesRaw = await db.all('SELECT url, tags FROM cve_references WHERE cve_id = $1', id);
+      const referencesRaw = await db.all('SELECT url, tags FROM cve_references WHERE cve_id = ?', id);
       const references = referencesRaw.map(r => ({
         url: r.url,
         tags: r.tags ? JSON.parse(r.tags) : []
       }));
 
       // Get change history
-      const changeHistoryRaw = await db.all('SELECT change_date, diff_json FROM cve_changes WHERE cve_id = $1 ORDER BY change_date DESC LIMIT 50', id);
+      const changeHistoryRaw = await db.all('SELECT change_date, diff_json FROM cve_changes WHERE cve_id = ? ORDER BY change_date DESC LIMIT 50', id);
       const changeHistory = changeHistoryRaw.map(c => ({
         date: c.change_date,
         changes: JSON.parse(c.diff_json)
       }));
 
       // Get workarounds
-      const workarounds = await db.all('SELECT workaround_text, language FROM cve_workarounds WHERE cve_id = $1', id);
+      const workarounds = await db.all('SELECT workaround_text, language FROM cve_workarounds WHERE cve_id = ?', id);
 
       // Get solutions
-      const solutions = await db.all('SELECT solution_text, language FROM cve_solutions WHERE cve_id = $1', id);
+      const solutions = await db.all('SELECT solution_text, language FROM cve_solutions WHERE cve_id = ?', id);
+
+      // Get temporal enrichment data (EPSS, exploit maturity, threat intel)
+      const temporalRow = await db.get(`
+        SELECT epss, exploit_maturity, cvss_bt_score, cvss_bt_severity,
+               cisa_kev, vulncheck_kev, exploitdb, metasploit, nuclei, poc_github,
+               last_updated
+        FROM cve_temporal WHERE cve_id = ?
+      `, id);
+
+      const temporal = temporalRow ? {
+        epss: temporalRow.epss,
+        exploitMaturity: temporalRow.exploit_maturity,
+        cvssBtScore: temporalRow.cvss_bt_score,
+        cvssBtSeverity: temporalRow.cvss_bt_severity,
+        sources: {
+          cisaKev: temporalRow.cisa_kev === 1,
+          vulncheckKev: temporalRow.vulncheck_kev === 1,
+          exploitdb: temporalRow.exploitdb === 1,
+          metasploit: temporalRow.metasploit === 1,
+          nuclei: temporalRow.nuclei === 1,
+          pocGithub: temporalRow.poc_github === 1
+        },
+        lastUpdated: temporalRow.last_updated
+      } : null;
+
+      // Get exploit links from Trickest data
+      const exploitRows = await db.all(`
+        SELECT source, url, description
+        FROM cve_exploits
+        WHERE cve_id = ?
+        ORDER BY source, url
+      `, id);
+
+      // Group exploits by source
+      const exploits = {};
+      for (const row of exploitRows) {
+        if (!exploits[row.source]) {
+          exploits[row.source] = [];
+        }
+        exploits[row.source].push({
+          url: row.url,
+          description: row.description
+        });
+      }
 
       // Build enhanced response (metrics array is single source of truth for CVSS)
       const enhancedCveData = {
@@ -469,7 +790,9 @@ async function handleRequest(req, res) {
         references,
         changeHistory,
         workarounds,
-        solutions
+        solutions,
+        temporal,
+        exploits
       };
 
       return sendJson(res, enhancedCveData);
@@ -491,10 +814,10 @@ async function handleRequest(req, res) {
         query = `
           SELECT vendor, COUNT(DISTINCT cve_id) as count
           FROM cve_products
-          WHERE vendor ILIKE $1
+          WHERE vendor LIKE ?
           GROUP BY vendor
           ORDER BY count DESC
-          LIMIT $2
+          LIMIT ?
         `;
         params = [`%${q}%`, limit];
       } else {
@@ -504,7 +827,7 @@ async function handleRequest(req, res) {
           FROM cve_products
           GROUP BY vendor
           ORDER BY count DESC
-          LIMIT $1
+          LIMIT ?
         `;
         params = [limit];
       }
@@ -534,12 +857,12 @@ async function handleRequest(req, res) {
       let paramIndex = 1;
 
       if (q) {
-        conditions.push(`product ILIKE $${paramIndex}`);
+        conditions.push(`product LIKE ?`);
         params.push(`%${q}%`);
         paramIndex++;
       }
       if (vendor) {
-        conditions.push(`vendor = $${paramIndex}`);
+        conditions.push(`vendor = ?`);
         params.push(vendor);
         paramIndex++;
       }
@@ -555,7 +878,7 @@ async function handleRequest(req, res) {
         ${whereClause}
         GROUP BY product, vendor
         ORDER BY count DESC
-        LIMIT $${paramIndex}
+        LIMIT ?
       `;
       params.push(limit);
 
@@ -693,7 +1016,7 @@ async function handleRequest(req, res) {
     const jobLogsMatch = pathname.match(/^\/api\/jobs\/(\d+)\/logs$/);
     if (req.method === 'GET' && jobLogsMatch) {
       const jobId = parseInt(jobLogsMatch[1]);
-      const logs = await db.all('SELECT id, timestamp, level, message, metadata FROM job_logs WHERE job_id = $1 ORDER BY id', jobId);
+      const logs = await db.all('SELECT id, timestamp, level, message, metadata FROM job_logs WHERE job_id = ? ORDER BY id', jobId);
       return sendJson(res, logs.map(l => ({
         id: l.id,
         timestamp: l.timestamp,
@@ -717,7 +1040,7 @@ async function handleRequest(req, res) {
       });
 
       // Send existing logs first
-      const existingLogs = await db.all('SELECT id, timestamp, level, message, metadata FROM job_logs WHERE job_id = $1 ORDER BY id', jobId);
+      const existingLogs = await db.all('SELECT id, timestamp, level, message, metadata FROM job_logs WHERE job_id = ? ORDER BY id', jobId);
       for (const log of existingLogs) {
         const data = {
           id: log.id,
@@ -762,12 +1085,12 @@ async function handleRequest(req, res) {
         if (validationError) {
           return sendError(res, validationError.error, 400);
         }
-        // DuckDB: Use RETURNING to get the inserted ID
-        const result = await db.get(
-          'INSERT INTO watchlists (name, query_json, enabled) VALUES ($1, $2, $3) RETURNING id',
+        // SQLite: Use run() and get lastID
+        const result = await db.run(
+          'INSERT INTO watchlists (name, query_json, enabled) VALUES (?, ?, ?)',
           body.name.trim(), JSON.stringify(body.query), body.enabled ? 1 : 0
         );
-        return sendJson(res, { id: result.id.toString() }, 201);
+        return sendJson(res, { id: result.lastID.toString() }, 201);
       }
     }
 
@@ -780,12 +1103,14 @@ async function handleRequest(req, res) {
         if (validationError) {
           return sendError(res, validationError.error, 400);
         }
-        await db.run('UPDATE watchlists SET name = $1, query_json = $2, enabled = $3 WHERE id = $4',
+        await db.run('UPDATE watchlists SET name = ?, query_json = ?, enabled = ? WHERE id = ?',
           body.name.trim(), JSON.stringify(body.query), body.enabled ? 1 : 0, id);
+        // Also update alert watchlist_name when watchlist is renamed
+        await db.run('UPDATE alerts SET watchlist_name = ? WHERE watchlist_id = ?', body.name.trim(), id);
         return sendJson(res, { success: true });
       }
       if (req.method === 'DELETE') {
-        await db.run('DELETE FROM watchlists WHERE id = $1', id);
+        await db.run('DELETE FROM watchlists WHERE id = ?', id);
         return sendJson(res, { success: true });
       }
     }
@@ -804,10 +1129,10 @@ async function handleRequest(req, res) {
         // Filter by KEV status if requested (DuckDB JSON string comparison)
         if (kev === 'true') {
           query += ' JOIN cves c ON a.cve_id = c.id';
-          where.push("(json_extract_string(c.json, '$.kev') = 'true' OR json_extract_string(c.json, '$.kev') = '1')");
+          where.push("json_extract(c.json, '$.kev') = 1");
         } else if (kev === 'false') {
           query += ' JOIN cves c ON a.cve_id = c.id';
-          where.push("(json_extract_string(c.json, '$.kev') IS NULL OR json_extract_string(c.json, '$.kev') = 'false' OR json_extract_string(c.json, '$.kev') = '0')");
+          where.push("(json_extract(c.json, '$.kev') IS NULL OR json_extract(c.json, '$.kev') != 1)");
         }
 
         // Filter by read status if requested
@@ -838,14 +1163,21 @@ async function handleRequest(req, res) {
     const alertReadMatch = pathname.match(/^\/api\/alerts\/(\d+)\/read$/);
     if (req.method === 'PUT' && alertReadMatch) {
       const id = alertReadMatch[1];
-      await db.run('UPDATE alerts SET read = 1 WHERE id = $1', id);
+      await db.run('UPDATE alerts SET read = 1 WHERE id = ?', id);
+      return sendJson(res, { success: true });
+    }
+
+    const alertUnreadMatch = pathname.match(/^\/api\/alerts\/(\d+)\/unread$/);
+    if (req.method === 'PUT' && alertUnreadMatch) {
+      const id = alertUnreadMatch[1];
+      await db.run('UPDATE alerts SET read = 0 WHERE id = ?', id);
       return sendJson(res, { success: true });
     }
 
     const alertMatch = pathname.match(/^\/api\/alerts\/(\d+)$/);
     if (req.method === 'DELETE' && alertMatch) {
       const id = alertMatch[1];
-      await db.run('DELETE FROM alerts WHERE id = $1', id);
+      await db.run('DELETE FROM alerts WHERE id = ?', id);
       return sendJson(res, { success: true });
     }
 
@@ -853,6 +1185,11 @@ async function handleRequest(req, res) {
     if (pathname === '/api/alerts/mark-all-read' && req.method === 'PUT') {
       await db.run('UPDATE alerts SET read = 1 WHERE read = 0');
       return sendJson(res, { success: true, updated: 0 });  // DuckDB doesn't return changes count easily
+    }
+
+    if (pathname === '/api/alerts/mark-all-unread' && req.method === 'PUT') {
+      await db.run('UPDATE alerts SET read = 0 WHERE read = 1');
+      return sendJson(res, { success: true, updated: 0 });
     }
 
     if (pathname === '/api/alerts/delete-all' && req.method === 'DELETE') {
@@ -863,7 +1200,10 @@ async function handleRequest(req, res) {
     // --- Static File Fallback ---
     // Serve built frontend in production, fall back to dev files otherwise
     if ((req.method === 'GET' || req.method === 'HEAD') && !pathname.startsWith('/api')) {
-      const safePath = path.normalize(pathname).replace(/^(\.\.[\/\\])+/, '');
+      // Robust path traversal prevention (per codeguard-0-file-handling-and-uploads)
+      // 1. Normalize the path to resolve . and ..
+      // 2. Verify the resolved path is within allowed directories
+      const normalizedPath = path.normalize(decodeURIComponent(pathname));
 
       // In production, serve from dist/ (built by Vite)
       // In development, serve from public/ or root (for dev files)
@@ -872,8 +1212,14 @@ async function handleRequest(req, res) {
         : [path.join(process.cwd(), 'public'), process.cwd()];
 
       for (const dir of staticDirs) {
-        const requestPath = pathname === '/' ? '/index.html' : safePath;
-        const filePath = path.join(dir, requestPath);
+        const requestPath = pathname === '/' ? '/index.html' : normalizedPath;
+        const filePath = path.resolve(dir, '.' + requestPath);
+
+        // Security: Verify resolved path is within the allowed directory
+        const realDir = fs.realpathSync(dir);
+        if (!filePath.startsWith(realDir + path.sep) && filePath !== realDir) {
+          continue; // Path traversal attempt - try next directory or reject
+        }
 
         if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
           const ext = path.extname(filePath);
@@ -890,7 +1236,29 @@ async function handleRequest(req, res) {
           const mime = mimeTypes[ext] || 'application/octet-stream';
           const stats = fs.statSync(filePath);
 
-          res.writeHead(200, { 'Content-Type': mime, 'Content-Length': stats.size });
+          // Add security headers for static files (CSP for HTML only)
+          const headers = {
+            'Content-Type': mime,
+            'Content-Length': stats.size,
+            ...SECURITY_HEADERS
+          };
+
+          // Add CSP header for HTML files (per codeguard-0-client-side-web-security)
+          if (ext === '.html') {
+            headers['Content-Security-Policy'] = [
+              "default-src 'self'",
+              "script-src 'self' https://cdn.tailwindcss.com https://esm.sh 'unsafe-inline'",
+              "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'",
+              "font-src 'self' https://fonts.gstatic.com",
+              "img-src 'self' data:",
+              "connect-src 'self'",
+              "frame-ancestors 'none'",
+              "base-uri 'self'",
+              "form-action 'self'"
+            ].join('; ');
+          }
+
+          res.writeHead(200, headers);
           if (req.method === 'HEAD') {
             res.end();
           } else {
@@ -908,7 +1276,23 @@ async function handleRequest(req, res) {
       for (const indexPath of indexPaths) {
         if (fs.existsSync(indexPath)) {
           const stats = fs.statSync(indexPath);
-          res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Length': stats.size });
+          const headers = {
+            'Content-Type': 'text/html',
+            'Content-Length': stats.size,
+            ...SECURITY_HEADERS,
+            'Content-Security-Policy': [
+              "default-src 'self'",
+              "script-src 'self' https://cdn.tailwindcss.com https://esm.sh 'unsafe-inline'",
+              "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'",
+              "font-src 'self' https://fonts.gstatic.com",
+              "img-src 'self' data:",
+              "connect-src 'self'",
+              "frame-ancestors 'none'",
+              "base-uri 'self'",
+              "form-action 'self'"
+            ].join('; ')
+          };
+          res.writeHead(200, headers);
           if (req.method === 'HEAD') {
             res.end();
           } else {
@@ -952,7 +1336,7 @@ async function cleanupOrphanedJobs() {
     await db.run(`
       UPDATE job_runs
       SET status = 'FAILED',
-          end_time = $1,
+          end_time = ?,
           error = 'Orphaned job - server restarted'
       WHERE status = 'RUNNING'
     `, timestamp);
@@ -986,9 +1370,9 @@ function startStuckJobDetector() {
           await db.run(`
             UPDATE job_runs
             SET status = 'FAILED',
-                end_time = $1,
+                end_time = ?,
                 error = 'Job detected as stuck (no progress for 10+ minutes)'
-            WHERE id = $2
+            WHERE id = ?
           `, timestamp, job.id);
           console.log(`[StuckDetector] Marked job ${job.id} as stuck (last heartbeat: ${job.last_heartbeat})`);
         }

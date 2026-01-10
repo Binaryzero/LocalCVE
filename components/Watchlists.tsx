@@ -234,10 +234,10 @@ const Watchlists: React.FC<WatchlistsProps> = ({ watchlists, onToggle, onDelete,
                         <label htmlFor={`kev-${wl.id}`} className="text-sm text-gray-300 mono">Known Exploited Only</label>
                       </div>
 
-                      {/* Date Range */}
+                      {/* Published Date Range */}
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="text-xs text-gray-500 mono mb-1 block">FROM DATE</label>
+                          <label className="text-xs text-gray-500 mono mb-1 block">PUBLISHED FROM</label>
                           <input
                             type="date"
                             value={editQuery.published_from || ''}
@@ -247,7 +247,7 @@ const Watchlists: React.FC<WatchlistsProps> = ({ watchlists, onToggle, onDelete,
                           />
                         </div>
                         <div>
-                          <label className="text-xs text-gray-500 mono mb-1 block">TO DATE</label>
+                          <label className="text-xs text-gray-500 mono mb-1 block">PUBLISHED TO</label>
                           <input
                             type="date"
                             value={editQuery.published_to || ''}
@@ -256,6 +256,62 @@ const Watchlists: React.FC<WatchlistsProps> = ({ watchlists, onToggle, onDelete,
                             style={{ borderColor: 'var(--cyber-border)' }}
                           />
                         </div>
+                      </div>
+
+                      {/* Modified Date Range */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-xs text-gray-500 mono mb-1 block">MODIFIED FROM</label>
+                          <input
+                            type="date"
+                            value={editQuery.modified_from || ''}
+                            onChange={(e) => setEditQuery({ ...editQuery, modified_from: e.target.value || undefined })}
+                            className="w-full px-3 py-2 rounded border bg-gray-900 text-gray-100 mono text-sm focus:outline-none focus:border-cyan-500"
+                            style={{ borderColor: 'var(--cyber-border)' }}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 mono mb-1 block">MODIFIED TO</label>
+                          <input
+                            type="date"
+                            value={editQuery.modified_to || ''}
+                            onChange={(e) => setEditQuery({ ...editQuery, modified_to: e.target.value || undefined })}
+                            className="w-full px-3 py-2 rounded border bg-gray-900 text-gray-100 mono text-sm focus:outline-none focus:border-cyan-500"
+                            style={{ borderColor: 'var(--cyber-border)' }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Vendors */}
+                      <div>
+                        <label className="text-xs text-gray-500 mono mb-1 block">VENDORS (comma-separated)</label>
+                        <input
+                          type="text"
+                          value={(editQuery.vendors || []).join(', ')}
+                          onChange={(e) => {
+                            const vendors = e.target.value ? e.target.value.split(',').map(v => v.trim()).filter(v => v) : undefined;
+                            setEditQuery({ ...editQuery, vendors: vendors?.length ? vendors : undefined });
+                          }}
+                          placeholder="e.g., microsoft, apache, google"
+                          className="w-full px-3 py-2 rounded border bg-gray-900 text-gray-100 mono text-sm focus:outline-none focus:border-cyan-500"
+                          style={{ borderColor: 'var(--cyber-border)' }}
+                        />
+                      </div>
+
+                      {/* Products */}
+                      <div>
+                        <label className="text-xs text-gray-500 mono mb-1 block">PRODUCTS (comma-separated)</label>
+                        <input
+                          type="text"
+                          value={(editQuery.products || []).join(', ')}
+                          onChange={(e) => {
+                            const products = e.target.value ? e.target.value.split(',').map(p => p.trim()).filter(p => p) : undefined;
+                            setEditQuery({ ...editQuery, products: products?.length ? products : undefined });
+                          }}
+                          placeholder="e.g., windows, chrome, office"
+                          className="w-full px-3 py-2 rounded border bg-gray-900 text-gray-100 mono text-sm focus:outline-none focus:border-cyan-500"
+                          style={{ borderColor: 'var(--cyber-border)' }}
+                        />
                       </div>
 
                       {/* Save/Cancel */}

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
-import getDb, { initPromise, rebuildFtsIndex as dbRebuildFtsIndex } from '../db.js';
+import getDb, { initPromise, rebuildFtsIndex as dbRebuildFtsIndex, enableBulkMode, disableBulkMode } from '../db.js';
 import { matchesQuery } from '../matcher.js';
 
 // Database reference (initialized lazily)
@@ -28,6 +28,10 @@ let bulkLoadMode = false;
 
 // --- Helpers ---
 const getTimestamp = () => new Date().toISOString();
+
+// Helper to convert null/undefined to empty string for DuckDB text parameters
+// DuckDB's @duckdb/node-api cannot bind null without explicit type information
+const nullToEmpty = (val) => val === null || val === undefined ? '' : val;
 
 // BigInt replacer for JSON.stringify (DuckDB returns BigInt for counts)
 const bigIntReplacer = (key, value) =>
@@ -72,7 +76,7 @@ function broadcastToSseClients(jobId, data) {
     for (const [, client] of sseClients) {
         if (client.jobId === jobId) {
             try {
-                client.res.write(`data: ${JSON.stringify(data)}\n\n`);
+                client.res.write(`data: ${JSON.stringify(data, bigIntReplacer)}\n\n`);
             } catch {
                 // Client disconnected, will be cleaned up on next request
             }
@@ -89,13 +93,14 @@ class JobLogger {
 
     async log(level, message, metadata = null) {
         const timestamp = getTimestamp();
-        const metadataJson = metadata ? JSON.stringify(metadata, bigIntReplacer) : null;
+        // Use empty string instead of null since DuckDB can't bind null without explicit type
+        const metadataJson = metadata ? JSON.stringify(metadata, bigIntReplacer) : '';
 
         // Persist to database
         try {
             if (this.db) {
                 await this.db.run(
-                    'INSERT INTO job_logs (job_id, timestamp, level, message, metadata) VALUES ($1, $2, $3, $4, $5)',
+                    'INSERT INTO job_logs (job_id, timestamp, level, message, metadata) VALUES (?, ?, ?, ?, ?)',
                     this.jobId, timestamp, level, message, metadataJson
                 );
             }
@@ -303,6 +308,16 @@ async function prepareRepo(logger, checkCancelled, dbRef) {
                 return { mode: 'full', oldHash, newHash };
             }
 
+            // Check if stored hash matches current HEAD - if not, we have pending changes
+            // (e.g., git was pulled manually outside of ingestion)
+            if (storedHash !== newHash) {
+                await logger.info('Stored commit differs from current HEAD, processing incremental updates', {
+                    storedHash: storedHash.substring(0, 8),
+                    currentHash: newHash.substring(0, 8)
+                });
+                return { mode: 'incremental', oldHash: storedHash, newHash };
+            }
+
             await logger.info('No git changes and database is current, skipping ingestion', { cveCount: count });
             return { mode: 'incremental', oldHash, newHash, noChanges: true };
         }
@@ -345,7 +360,8 @@ function getChangedFiles(oldHash, newHash, logger = null) {
     try {
         const diffOutput = gitSpawn(['diff', '--name-only', oldHash, newHash]);
         const files = diffOutput.split('\n')
-            .filter(line => line.startsWith('cves/') && line.endsWith('.json'))
+            .filter(line => line.startsWith('cves/') && line.endsWith('.json')
+                && !line.endsWith('delta.json') && !line.endsWith('deltaLog.json'))
             .map(line => path.join(REPO_DIR, line));
         if (log.info.constructor.name === 'AsyncFunction') {
             // Don't await in sync context, just fire
@@ -383,6 +399,23 @@ export function normalizeCve5(raw, kevSet = null) {
 
     const metrics = cna.metrics || [];
     for (const m of metrics) {
+        // CVSS 4.0 - highest priority
+        if (m.cvssV4_0) {
+            const metric = {
+                version: '4.0',
+                score: m.cvssV4_0.baseScore,
+                severity: m.cvssV4_0.baseSeverity,
+                vector: m.cvssV4_0.vectorString
+            };
+            allMetrics.push(metric);
+            // Set as primary if we haven't set one yet (priority: 4.0 > 3.1 > 3.0 > 2.0)
+            if (!primaryVersion) {
+                primaryScore = metric.score;
+                primarySeverity = metric.severity;
+                primaryVector = metric.vector;
+                primaryVersion = metric.version;
+            }
+        }
         if (m.cvssV3_1) {
             const metric = {
                 version: '3.1',
@@ -391,8 +424,8 @@ export function normalizeCve5(raw, kevSet = null) {
                 vector: m.cvssV3_1.vectorString
             };
             allMetrics.push(metric);
-            // Set as primary if we haven't set one yet (priority: 3.1 > 3.0 > 2.0)
-            if (!primaryVersion) {
+            // Set as primary if we haven't set one yet (priority: 4.0 > 3.1 > 3.0 > 2.0)
+            if (!primaryVersion || primaryVersion === '3.0' || primaryVersion === '2.0') {
                 primaryScore = metric.score;
                 primarySeverity = metric.severity;
                 primaryVector = metric.vector;
@@ -429,6 +462,79 @@ export function normalizeCve5(raw, kevSet = null) {
                 primarySeverity = metric.severity;
                 primaryVector = metric.vector;
                 primaryVersion = metric.version;
+            }
+        }
+    }
+
+    // Also extract metrics from ADP containers (NVD, CISA, etc.)
+    const adpContainers = raw.containers?.adp || [];
+    for (const adp of adpContainers) {
+        const adpMetrics = adp.metrics || [];
+        for (const m of adpMetrics) {
+            // CVSS 4.0 from ADP - highest priority
+            if (m.cvssV4_0) {
+                const metric = {
+                    version: '4.0',
+                    score: m.cvssV4_0.baseScore,
+                    severity: m.cvssV4_0.baseSeverity,
+                    vector: m.cvssV4_0.vectorString,
+                    source: adp.providerMetadata?.shortName || 'ADP'
+                };
+                allMetrics.push(metric);
+                if (!primaryVersion) {
+                    primaryScore = metric.score;
+                    primarySeverity = metric.severity;
+                    primaryVector = metric.vector;
+                    primaryVersion = metric.version;
+                }
+            }
+            if (m.cvssV3_1) {
+                const metric = {
+                    version: '3.1',
+                    score: m.cvssV3_1.baseScore,
+                    severity: m.cvssV3_1.baseSeverity,
+                    vector: m.cvssV3_1.vectorString,
+                    source: adp.providerMetadata?.shortName || 'ADP'
+                };
+                allMetrics.push(metric);
+                if (!primaryVersion || primaryVersion === '3.0' || primaryVersion === '2.0') {
+                    primaryScore = metric.score;
+                    primarySeverity = metric.severity;
+                    primaryVector = metric.vector;
+                    primaryVersion = metric.version;
+                }
+            }
+            if (m.cvssV3_0) {
+                const metric = {
+                    version: '3.0',
+                    score: m.cvssV3_0.baseScore,
+                    severity: m.cvssV3_0.baseSeverity,
+                    vector: m.cvssV3_0.vectorString,
+                    source: adp.providerMetadata?.shortName || 'ADP'
+                };
+                allMetrics.push(metric);
+                if (!primaryVersion || primaryVersion === '2.0') {
+                    primaryScore = metric.score;
+                    primarySeverity = metric.severity;
+                    primaryVector = metric.vector;
+                    primaryVersion = metric.version;
+                }
+            }
+            if (m.cvssV2_0) {
+                const metric = {
+                    version: '2.0',
+                    score: m.cvssV2_0.baseScore,
+                    severity: m.cvssV2_0.baseSeverity || 'UNKNOWN',
+                    vector: m.cvssV2_0.vectorString,
+                    source: adp.providerMetadata?.shortName || 'ADP'
+                };
+                allMetrics.push(metric);
+                if (!primaryVersion) {
+                    primaryScore = metric.score;
+                    primarySeverity = metric.severity;
+                    primaryVector = metric.vector;
+                    primaryVersion = metric.version;
+                }
             }
         }
     }
@@ -497,8 +603,8 @@ export function normalizeCve5(raw, kevSet = null) {
     }
 
     // Extract SSVC from ADP containers (CISA prioritization)
+    // Note: adpContainers already declared above for metrics extraction
     const ssvc = [];
-    const adpContainers = raw.containers?.adp || [];
     for (const adp of adpContainers) {
         const provider = adp.providerMetadata?.shortName;
         for (const metric of (adp.metrics || [])) {
@@ -597,24 +703,24 @@ export function normalizeCve5(raw, kevSet = null) {
 async function setBulkLoadMode(enabled, dbRef) {
     bulkLoadMode = enabled;
     if (enabled) {
-        console.log('[Bulk Mode] Enabled - FTS deferred, alerts skipped');
+        enableBulkMode();
     } else {
-        console.log('[Bulk Mode] Disabled');
+        disableBulkMode();
     }
 }
 
-// Rebuild DuckDB FTS index from cves table (called after bulk load)
+// Rebuild SQLite FTS5 index from cves table (called after bulk load)
 async function rebuildFtsIndex(logger = null) {
     const log = logger || { info: console.log.bind(console), warn: console.warn.bind(console) };
     const dbRef = await ensureDb();
 
-    // Use the db.js rebuildFtsIndex helper which handles DuckDB FTS
+    // Use the db.js rebuildFtsIndex helper which handles SQLite FTS5
     await dbRebuildFtsIndex();
 
     if (log.info.constructor.name === 'AsyncFunction') {
-        await log.info('FTS index rebuilt using DuckDB FTS extension');
+        await log.info('FTS5 index rebuilt');
     } else {
-        log.info('FTS index rebuilt using DuckDB FTS extension');
+        log.info('FTS5 index rebuilt');
     }
 }
 
@@ -634,7 +740,7 @@ async function processBatch(batch, dbRef) {
     await dbRef.transaction(async () => {
         for (const item of batch) {
             const hash = computeHash(item);
-            const existing = await dbRef.get('SELECT normalized_hash, json FROM cves WHERE id = $1', item.id);
+            const existing = await dbRef.get('SELECT normalized_hash, json FROM cves WHERE id = ?', item.id);
 
             if (existing && existing.normalized_hash === hash) continue;
 
@@ -645,7 +751,7 @@ async function processBatch(batch, dbRef) {
                 const changeDate = item.lastModified || item.published || getTimestamp();
                 if (Object.keys(diff).length > 0) {
                     await dbRef.run(
-                        'INSERT INTO cve_changes (cve_id, change_date, diff_json) VALUES ($1, $2, $3)',
+                        'INSERT INTO cve_changes (cve_id, change_date, diff_json) VALUES (?, ?, ?)',
                         item.id, changeDate, JSON.stringify(diff)
                     );
                 }
@@ -653,56 +759,56 @@ async function processBatch(batch, dbRef) {
 
             await dbRef.run(`
               INSERT INTO cves (id, description, published, last_modified, vuln_status, normalized_hash, json, title, source_advisory)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(id) DO UPDATE SET
                 description = excluded.description, last_modified = excluded.last_modified,
                 vuln_status = excluded.vuln_status, normalized_hash = excluded.normalized_hash, json = excluded.json,
                 title = excluded.title, source_advisory = excluded.source_advisory
             `, item.id, item.description, item.published, item.lastModified, item.vulnStatus,
-               hash, JSON.stringify(item), item.title || null, item.sourceAdvisory || null);
+               hash, JSON.stringify(item), nullToEmpty(item.title), nullToEmpty(item.sourceAdvisory));
 
-            await dbRef.run('DELETE FROM metrics WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM metrics WHERE cve_id = ?', item.id);
             // Insert all CVSS metrics instead of just the primary one
             if (item.allMetrics && item.allMetrics.length > 0) {
                 for (const metric of item.allMetrics) {
                     await dbRef.run(
-                        'INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)',
+                        'INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)',
                         item.id, metric.version, metric.score, metric.severity, metric.vector
                     );
                 }
             } else if (item.score !== null) {
                 // Fallback to original logic for backward compatibility
                 await dbRef.run(
-                    'INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES ($1, $2, $3, $4, $5)',
+                    'INSERT INTO metrics (cve_id, cvss_version, score, severity, vector_string) VALUES (?, ?, ?, ?, ?)',
                     item.id, item.cvssVersion, item.score, item.severity, item.vector
                 );
             }
 
             // Handle references - can be either old format (string[]) or new format ({url, tags}[])
-            await dbRef.run('DELETE FROM cve_references WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM cve_references WHERE cve_id = ?', item.id);
             const refUrls = [];
             for (const ref of item.references) {
                 if (typeof ref === 'string') {
-                    // Old format - just URL
-                    await dbRef.run('INSERT INTO cve_references (cve_id, url, tags) VALUES ($1, $2, $3)', item.id, ref, null);
+                    // Old format - just URL (empty string for tags since DuckDB can't bind null without type)
+                    await dbRef.run('INSERT INTO cve_references (cve_id, url, tags) VALUES (?, ?, ?)', item.id, ref, '');
                     refUrls.push(ref);
                 } else {
                     // New format - {url, tags}
                     await dbRef.run(
-                        'INSERT INTO cve_references (cve_id, url, tags) VALUES ($1, $2, $3)',
-                        item.id, ref.url, ref.tags?.length ? JSON.stringify(ref.tags) : null
+                        'INSERT INTO cve_references (cve_id, url, tags) VALUES (?, ?, ?)',
+                        item.id, ref.url, ref.tags?.length ? JSON.stringify(ref.tags) : ''
                     );
                     refUrls.push(ref.url);
                 }
             }
 
-            await dbRef.run('DELETE FROM configs WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM configs WHERE cve_id = ?', item.id);
             if (item.configurations.length > 0) {
-                await dbRef.run('INSERT INTO configs (cve_id, nodes) VALUES ($1, $2)', item.id, JSON.stringify(item.configurations));
+                await dbRef.run('INSERT INTO configs (cve_id, nodes) VALUES (?, ?)', item.id, JSON.stringify(item.configurations));
             }
 
             // Insert denormalized vendor/product data for fast queries
-            await dbRef.run('DELETE FROM cve_products WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM cve_products WHERE cve_id = ?', item.id);
             if (item.configurations.length > 0) {
                 const seenProducts = new Set();
                 for (const config of item.configurations) {
@@ -712,7 +818,7 @@ async function processBatch(batch, dbRef) {
                     if (!seenProducts.has(key) && vendor !== 'n/a' && product !== 'n/a') {
                         seenProducts.add(key);
                         await dbRef.run(
-                            'INSERT INTO cve_products (cve_id, vendor, product) VALUES ($1, $2, $3)',
+                            'INSERT INTO cve_products (cve_id, vendor, product) VALUES (?, ?, ?)',
                             item.id, vendor, product
                         );
                     }
@@ -720,55 +826,55 @@ async function processBatch(batch, dbRef) {
             }
 
             // Insert CWE classifications
-            await dbRef.run('DELETE FROM cve_cwes WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM cve_cwes WHERE cve_id = ?', item.id);
             if (item.cwes?.length > 0) {
                 for (const cwe of item.cwes) {
                     await dbRef.run(
-                        'INSERT INTO cve_cwes (cve_id, cwe_id, description) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                        'INSERT INTO cve_cwes (cve_id, cwe_id, description) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
                         item.id, cwe.cweId, cwe.description
                     );
                 }
             }
 
             // Insert CAPEC attack patterns
-            await dbRef.run('DELETE FROM cve_capec WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM cve_capec WHERE cve_id = ?', item.id);
             if (item.capecs?.length > 0) {
                 for (const capec of item.capecs) {
                     await dbRef.run(
-                        'INSERT INTO cve_capec (cve_id, capec_id, description) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                        'INSERT INTO cve_capec (cve_id, capec_id, description) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
                         item.id, capec.capecId, capec.description
                     );
                 }
             }
 
             // Insert SSVC scores
-            await dbRef.run('DELETE FROM cve_ssvc WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM cve_ssvc WHERE cve_id = ?', item.id);
             if (item.ssvc?.length > 0) {
                 for (const s of item.ssvc) {
                     await dbRef.run(
-                        'INSERT INTO cve_ssvc (cve_id, exploitation, automatable, technical_impact, provider) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
+                        'INSERT INTO cve_ssvc (cve_id, exploitation, automatable, technical_impact, provider) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
                         item.id, s.exploitation, s.automatable, s.technicalImpact, s.provider
                     );
                 }
             }
 
             // Insert workarounds
-            await dbRef.run('DELETE FROM cve_workarounds WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM cve_workarounds WHERE cve_id = ?', item.id);
             if (item.workarounds?.length > 0) {
                 for (const w of item.workarounds) {
                     await dbRef.run(
-                        'INSERT INTO cve_workarounds (cve_id, workaround_text, language) VALUES ($1, $2, $3)',
+                        'INSERT INTO cve_workarounds (cve_id, workaround_text, language) VALUES (?, ?, ?)',
                         item.id, w.text, w.language
                     );
                 }
             }
 
             // Insert solutions
-            await dbRef.run('DELETE FROM cve_solutions WHERE cve_id = $1', item.id);
+            await dbRef.run('DELETE FROM cve_solutions WHERE cve_id = ?', item.id);
             if (item.solutions?.length > 0) {
                 for (const s of item.solutions) {
                     await dbRef.run(
-                        'INSERT INTO cve_solutions (cve_id, solution_text, language) VALUES ($1, $2, $3)',
+                        'INSERT INTO cve_solutions (cve_id, solution_text, language) VALUES (?, ?, ?)',
                         item.id, s.text, s.language
                     );
                 }
@@ -781,17 +887,17 @@ async function processBatch(batch, dbRef) {
                         if (matchesQuery(item, wl.query)) {
                             // Check for existing unread alert to prevent duplicates
                             const existingAlert = await dbRef.get(
-                                'SELECT id FROM alerts WHERE cve_id = $1 AND watchlist_id = $2 AND read = 0',
+                                'SELECT id FROM alerts WHERE cve_id = ? AND watchlist_id = ? AND read = 0',
                                 item.id, wl.id
                             );
                             if (!existingAlert) {
                                 const type = existing ? 'UPDATED_MATCH' : 'NEW_MATCH';
                                 await dbRef.run(
-                                    'INSERT INTO alerts (cve_id, watchlist_id, watchlist_name, type, created_at) VALUES ($1, $2, $3, $4, $5)',
+                                    'INSERT INTO alerts (cve_id, watchlist_id, watchlist_name, type, created_at) VALUES (?, ?, ?, ?, ?)',
                                     item.id, wl.id, wl.name, type, getTimestamp()
                                 );
                                 // Update watchlist match count
-                                await dbRef.run('UPDATE watchlists SET match_count = match_count + 1 WHERE id = $1', wl.id);
+                                await dbRef.run('UPDATE watchlists SET match_count = match_count + 1 WHERE id = ?', wl.id);
                                 console.log(`[Alert] Generated ${type} alert for ${item.id} matching watchlist "${wl.name}"`);
                             }
                         }
@@ -830,7 +936,7 @@ async function runIngest(jobId, useBulkMode = false) {
 
     // Cancellation check helper
     const checkCancelled = async () => {
-        const result = await dbRef.get('SELECT cancel_requested FROM job_runs WHERE id = $1', jobId);
+        const result = await dbRef.get('SELECT cancel_requested FROM job_runs WHERE id = ?', jobId);
         return result?.cancel_requested === 1;
     };
 
@@ -842,9 +948,9 @@ async function runIngest(jobId, useBulkMode = false) {
             const percent = totalFiles > 0 ? Math.round((processed / totalFiles) * 100) : 0;
             await dbRef.run(`
                 UPDATE job_runs SET
-                  progress_percent = $1, items_processed = $2, items_added = $3, items_updated = $4,
-                  items_unchanged = $5, current_phase = $6, last_heartbeat = $7, total_files = $8
-                WHERE id = $9
+                  progress_percent = ?, items_processed = ?, items_added = ?, items_updated = ?,
+                  items_unchanged = ?, current_phase = ?, last_heartbeat = ?, total_files = ?
+                WHERE id = ?
             `, percent, processed, stats.added, stats.updated, stats.unchanged, phase, getTimestamp(), totalFiles, jobId);
             lastHeartbeat = now;
         }
@@ -863,7 +969,7 @@ async function runIngest(jobId, useBulkMode = false) {
         // Check cancellation before git operations
         if (await checkCancelled()) {
             await logger.info('Job cancelled before repository preparation');
-            await dbRef.run('UPDATE job_runs SET end_time = $1, status = $2, items_processed = $3, error = $4 WHERE id = $5',
+            await dbRef.run('UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, error = ? WHERE id = ?',
                 getTimestamp(), 'CANCELLED', 0, 'Cancelled by user', jobId);
             return;
         }
@@ -873,7 +979,7 @@ async function runIngest(jobId, useBulkMode = false) {
 
         if (repoResult.cancelled) {
             await logger.info('Job cancelled during repository preparation');
-            await dbRef.run('UPDATE job_runs SET end_time = $1, status = $2, items_processed = $3, error = $4 WHERE id = $5',
+            await dbRef.run('UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, error = ? WHERE id = ?',
                 getTimestamp(), 'CANCELLED', 0, 'Cancelled by user', jobId);
             return;
         }
@@ -882,7 +988,7 @@ async function runIngest(jobId, useBulkMode = false) {
 
         if (noChanges) {
             await logger.info('No changes to process');
-            await dbRef.run('UPDATE job_runs SET end_time = $1, status = $2, items_processed = $3, error = $4 WHERE id = $5',
+            await dbRef.run('UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, error = ? WHERE id = ?',
                 getTimestamp(), 'COMPLETED', 0, 'No updates found', jobId);
             return;
         }
@@ -912,7 +1018,7 @@ async function runIngest(jobId, useBulkMode = false) {
 
         if (!fileSource || totalFiles === 0) {
             await logger.info('No files to process');
-            await dbRef.run('UPDATE job_runs SET end_time = $1, status = $2, items_processed = $3, error = $4 WHERE id = $5',
+            await dbRef.run('UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, error = ? WHERE id = ?',
                 getTimestamp(), 'COMPLETED', 0, 'No files to process', jobId);
             return;
         }
@@ -950,7 +1056,7 @@ async function runIngest(jobId, useBulkMode = false) {
                 // Check cancellation before parallel read
                 if (await checkCancelled()) {
                     await logger.info('Job cancelled during file processing', { processed: totalProcessed });
-                    await dbRef.run('UPDATE job_runs SET end_time = $1, status = $2, items_processed = $3, error = $4 WHERE id = $5',
+                    await dbRef.run('UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, error = ? WHERE id = ?',
                         getTimestamp(), 'CANCELLED', totalProcessed, 'Cancelled by user', jobId);
                     return;
                 }
@@ -962,9 +1068,10 @@ async function runIngest(jobId, useBulkMode = false) {
 
                 // Process results
                 for (const normalized of results) {
-                    if (normalized) {
+                    // Skip malformed CVEs (missing id field)
+                    if (normalized && normalized.id) {
                         // Track if this is a new or updated CVE
-                        const existing = await dbRef.get('SELECT normalized_hash FROM cves WHERE id = $1', normalized.id);
+                        const existing = await dbRef.get('SELECT normalized_hash FROM cves WHERE id = ?', normalized.id);
                         if (!existing) {
                             stats.added++;
                         } else if (existing.normalized_hash !== computeHash(normalized)) {
@@ -1003,8 +1110,9 @@ async function runIngest(jobId, useBulkMode = false) {
             filesRead += readBatch.length;
 
             for (const normalized of results) {
-                if (normalized) {
-                    const existing = await dbRef.get('SELECT normalized_hash FROM cves WHERE id = $1', normalized.id);
+                // Skip malformed CVEs (missing id field)
+                if (normalized && normalized.id) {
+                    const existing = await dbRef.get('SELECT normalized_hash FROM cves WHERE id = ?', normalized.id);
                     if (!existing) {
                         stats.added++;
                     } else if (existing.normalized_hash !== computeHash(normalized)) {
@@ -1026,7 +1134,7 @@ async function runIngest(jobId, useBulkMode = false) {
 
         // Final update
         await dbRef.run(
-            "INSERT INTO system_metadata (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO system_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             'cvelist_commit', newHash
         );
 
@@ -1048,8 +1156,8 @@ async function runIngest(jobId, useBulkMode = false) {
             parseErrors: stats.parseErrors
         });
 
-        await dbRef.run('UPDATE job_runs SET end_time = $1, status = $2, items_processed = $3, error = $4 WHERE id = $5',
-            getTimestamp(), 'COMPLETED', totalProcessed, null, jobId);
+        await dbRef.run('UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, items_added = ?, items_updated = ?, items_unchanged = ?, error = ? WHERE id = ?',
+            getTimestamp(), 'COMPLETED', totalProcessed, stats.added, stats.updated, stats.unchanged, '', jobId);
 
     } catch (err) {
         // Ensure bulk mode is disabled even on error
@@ -1057,19 +1165,19 @@ async function runIngest(jobId, useBulkMode = false) {
             await setBulkLoadMode(false, dbRef);
         }
         await logger.error('Ingestion failed', { error: err.message, stack: err.stack });
-        await dbRef.run('UPDATE job_runs SET end_time = $1, status = $2, items_processed = $3, error = $4 WHERE id = $5',
-            getTimestamp(), 'FAILED', totalProcessed, err.message, jobId);
+        await dbRef.run('UPDATE job_runs SET end_time = ?, status = ?, items_processed = ?, items_added = ?, items_updated = ?, items_unchanged = ?, error = ? WHERE id = ?',
+            getTimestamp(), 'FAILED', totalProcessed, stats.added, stats.updated, stats.unchanged, err.message, jobId);
     }
 }
 
 export async function run() {
     const dbRef = await ensureDb();
     const timestamp = getTimestamp();
-    const result = await dbRef.get(
-        "INSERT INTO job_runs (start_time, status, items_processed, last_heartbeat) VALUES ($1, 'RUNNING', 0, $2) RETURNING id",
+    const result = await dbRef.run(
+        "INSERT INTO job_runs (start_time, status, items_processed, last_heartbeat) VALUES (?, 'RUNNING', 0, ?)",
         timestamp, timestamp
     );
-    const jobId = result.id;
+    const jobId = result.lastID;
     runIngest(jobId, false).catch(err => console.error('Ingest error:', err));
     return jobId;
 }
@@ -1079,11 +1187,11 @@ export async function run() {
 export async function runBulk() {
     const dbRef = await ensureDb();
     const timestamp = getTimestamp();
-    const result = await dbRef.get(
-        "INSERT INTO job_runs (start_time, status, items_processed, last_heartbeat) VALUES ($1, 'RUNNING', 0, $2) RETURNING id",
+    const result = await dbRef.run(
+        "INSERT INTO job_runs (start_time, status, items_processed, last_heartbeat) VALUES (?, 'RUNNING', 0, ?)",
         timestamp, timestamp
     );
-    const jobId = result.id;
+    const jobId = result.lastID;
     runIngest(jobId, true).catch(err => console.error('Bulk ingest error:', err));
     return jobId;
 }
@@ -1091,18 +1199,18 @@ export async function runBulk() {
 // Cancel a running job
 export async function cancelJob(jobId) {
     const dbRef = await ensureDb();
-    await dbRef.run('UPDATE job_runs SET cancel_requested = 1 WHERE id = $1', jobId);
+    await dbRef.run('UPDATE job_runs SET cancel_requested = 1 WHERE id = ?', jobId);
 }
 
 // Get job logs
 export async function getJobLogs(jobId) {
     const dbRef = await ensureDb();
-    return await dbRef.all('SELECT * FROM job_logs WHERE job_id = $1 ORDER BY id ASC', jobId);
+    return await dbRef.all('SELECT * FROM job_logs WHERE job_id = ? ORDER BY id ASC', jobId);
 }
 
 export async function getJobLogsSince(jobId, sinceId) {
     const dbRef = await ensureDb();
-    return await dbRef.all('SELECT * FROM job_logs WHERE job_id = $1 AND id > $2 ORDER BY id ASC', jobId, sinceId);
+    return await dbRef.all('SELECT * FROM job_logs WHERE job_id = ? AND id > ? ORDER BY id ASC', jobId, sinceId);
 }
 
 // Export helper functions for testing and external use

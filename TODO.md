@@ -357,6 +357,227 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
   - ✓ Added index on metrics.cve_id for query performance (critical for 326k+ CVEs)
   - ✓ Added parseErrors tracking to ingestion (counts failed file parses)
   - ✓ Documented FK constraint removal decision (intentional for bulk insert performance)
+- ✓ **DuckDB to SQLite Reversion** (Jan 8, 2026):
+  - ✓ Reverted from DuckDB to SQLite due to segfault crashes during ingestion
+  - ✓ DuckDB instability issues with large datasets made it unreliable
+  - ✓ SQLite with better-sqlite3 is rock-solid and synchronous
+  - ✓ Optimized SQLite with bulk mode (synchronous=OFF, journal_mode=MEMORY)
+  - ✓ Added 64MB cache size and 256MB memory-mapped I/O
+  - ✓ Converted all async patterns back to sync better-sqlite3 API
+  - ✓ Transaction wrapper uses manual BEGIN/COMMIT for async compatibility
+- ✓ **ADP Metrics Extraction** (Jan 8, 2026):
+  - ✓ Fixed CVSS scores showing N/A for CVEs like CVE-2021-45046
+  - ✓ Root cause: Metrics only extracted from CNA containers, missing ADP-sourced scores
+  - ✓ Added ADP metrics extraction loop to normalizeCve5() in nvd.js
+  - ✓ Extracts CVSS 3.1, 3.0, 2.0 from all ADP containers (CISA-ADP, NVD, etc.)
+  - ✓ Full re-ingestion updated 31,904 CVEs with ADP metrics
+  - ✓ CVE-2021-45046 now shows: Score 9.0, CRITICAL, KEV: true (from CISA-ADP)
+- ✓ **Search Parameter Fix** (Jan 8, 2026):
+  - ✓ Fixed "Too few parameter values" error when searching
+  - ✓ Root cause: Search query had two ? placeholders but only one parameter pushed
+  - ✓ Fixed by pushing searchTerm twice for both `c.id LIKE ?` and `c.description LIKE ?`
+- ✓ **KEV Filter Fix** (Jan 8, 2026):
+  - ✓ Fixed KEV filter returning 0 results
+  - ✓ SQLite json_extract returns integer 1 for boolean true, not string 'true'
+  - ✓ Changed comparison from `= 'true' OR = '1'` to `= 1`
+- ✓ **CVSS 4.0 Support** (Jan 8, 2026):
+  - ✓ Added CVSS 4.0 extraction to normalizeCve5() in nvd.js (both CNA and ADP containers)
+  - ✓ Added CVSS 4.0 vector component definitions to CvssVersionTabs.tsx
+  - ✓ Updated parseVectorString to detect and parse CVSS 4.0 vectors
+  - ✓ Added cvss40_min filtering to server.js API
+  - ✓ Added cvss40Score/cvss40Severity to CVE list response
+  - ✓ Updated SeverityMatrix to include CVSS 4.0 column
+  - ✓ Full re-ingestion updated 16,473 CVEs with CVSS 4.0 metrics
+  - ✓ Verified: CVE-2013-10054 shows 9.3 CRITICAL with CVSS 4.0 vector
+- ✓ **Ingestion Log Message & Job Stats Fix** (Jan 8, 2026):
+  - ✓ Fixed stale log message: "DuckDB FTS extension" → "FTS5 index rebuilt"
+  - ✓ Fixed job completion stats not being written to database
+  - ✓ Root cause: Final UPDATE query only wrote items_processed, not items_added/updated/unchanged
+  - ✓ Added items_added, items_updated, items_unchanged to both COMPLETED and FAILED update queries
+  - ✓ UI now shows accurate job statistics instead of all 0s
+- ✓ **UX Improvements - Clear Filters & CVE Detail Navigation** (Jan 8, 2026):
+  - ✓ Added "CLEAR" button to CVE search page (red, appears when filters active)
+  - ✓ Clears all filters: text, CVSS, date range, vendors, products, KEV, matrix, watchlist
+  - ✓ Fixed CVE detail view persisting when navigating away from CVE page
+  - ✓ Created `handleNavigate()` that clears `selectedCveId` on page switch
+  - ✓ `viewCve()` from alerts still works correctly (explicitly sets CVE ID)
+- ✓ **CVSS Filter/Display - Version Priority** (Jan 8, 2026):
+  - ✓ Changed from MAX score to version priority: 4.0 > 3.1 > 3.0 > 2.0
+  - ✓ Root cause: MAX score often selected CVSS 2.0 which has "UNKNOWN" severity
+  - ✓ Example: CVE-2025-15471 had CVSS 2.0=10.0 (UNKNOWN), CVSS 4.0=9.3 (CRITICAL)
+  - ✓ Now displays 9.3 CRITICAL from 4.0 instead of "10 UNKNOWN" from 2.0
+  - ✓ Filter logic also uses version priority to ensure consistency
+  - ✓ Newer CVSS versions are more accurate and have proper severity labels
+- ✓ **CVSS Duplicate Score Handling** (Jan 8, 2026):
+  - ✓ Root cause: 279 CVEs have multiple scores for same CVSS version (CNA vs ADP assessments)
+  - ✓ Example: CVE-2021-41277 had two CVSS 3.1 scores: 10.0 and 7.5
+  - ✓ Display showed 7.5 but filter matched on 10.0 (inconsistent)
+  - ✓ Fixed: Both display and filter now use MAX score per version
+  - ✓ CVE-2021-41277 now shows 10 CRITICAL consistently
+- ✓ **Data Grid Improvements** (Jan 8, 2026):
+  - ✓ Fixed pagination showing when grid is blank (added cves.length > 0 && hasActiveSearch guard)
+  - ✓ Fixed grid not filling available space (restructured with flex layout)
+  - ✓ Fixed having to scroll up to access nav buttons (pagination now inside flex container)
+  - ✓ Added server-side column sorting:
+    - ✓ types.ts: Added sort_by and sort_order to QueryModel
+    - ✓ server.js: Added sort parameter parsing and ORDER BY clause with SQL injection protection
+    - ✓ App.tsx: Added sort state and handleSortChange handler
+    - ✓ CveList.tsx: Added SortableHeader component with click-to-sort and direction indicators
+  - ✓ Sortable columns: CVE ID (alphabetical), Severity (CVSS score with version priority), Published (date)
+  - ✓ Sort direction toggles on click, shows up/down chevron indicator
+  - ✓ Server-side sorting ensures consistent ordering across all pages
+  - ✓ All 109 unit tests passing, build verified (667KB)
+- ✓ **CVE Detail - Cleanup** (Jan 8, 2026):
+  - ✓ Removed versionType and defaultStatus from affected products display
+  - ✓ These technical values (maven, python, rpm, semver) aren't useful to end users
+- ✓ **UI/UX Improvements** (Jan 8, 2026):
+  - ✓ Grid now uses full width (removed max-w-7xl constraint from Layout.tsx)
+  - ✓ Added missing watchlist edit options: modified date range, vendors, products
+  - ✓ Added unread alerts badge to navigation (red badge with count, handles 99+ overflow)
+  - ✓ Added "Recently Updated" filter with 24H/7D/30D presets (amber colored)
+  - ✓ Server now supports modified_from/modified_to API parameters
+  - ✓ All 109 unit tests passing, build verified (671KB)
+- ✓ **UI Polish** (Jan 8, 2026):
+  - ✓ Fixed duplicate badge on alerts nav item (badge only on icon when collapsed, only at end when expanded)
+  - ✓ Removed pulse animation from active menu indicator
+  - ✓ Made filter presets fully editable/removable (no more locked built-in presets)
+  - ✓ Changed date presets to relative labels: "Today", "Last 7 Days", "Last 30 Days"
+  - ✓ Combined published and modified date filters onto same row (side-by-side layout)
+  - ✓ Modified date filter now works correctly (required server restart after previous changes)
+  - ✓ All 109 unit tests passing, build verified (670KB)
+- ✓ **Settings & Preferences** (Jan 8, 2026):
+  - ✓ Created Settings menu with System nav section
+  - ✓ Added option to hide rejected CVEs (filters on vuln_status='Rejected')
+  - ✓ Added option to hide disputed CVEs (filters on vuln_status='Disputed')
+  - ✓ Settings stored in localStorage with API pass-through (hide_rejected, hide_disputed params)
+  - ✓ Restored active menu dot indicator (without pulse animation)
+  - ✓ Added filter preset management to settings:
+    - ✓ View all presets with name, icon, color, and query summary
+    - ✓ Edit preset name, icon (5 options), and color (8 options)
+    - ✓ Delete any preset (no more locked built-in presets)
+    - ✓ Restore defaults button (Critical Only, High + Recent, Known Exploited)
+    - ✓ Add new presets with custom name, icon, and color
+  - ✓ Build verified (684KB)
+- ✓ **Alert Improvements** (Jan 8, 2026):
+  - ✓ Added mark as unread functionality (bell icon button, amber hover)
+  - ✓ Added `/api/alerts/:id/unread` endpoint (PUT)
+  - ✓ Watchlist rename now updates associated alert watchlistName (optimistic update)
+- ✓ **Watchlist & Filter Improvements** (Jan 8, 2026):
+  - ✓ Fixed date being added twice when saving watchlist ("Today" now sets single date, not range)
+  - ✓ Added relative date support for watchlists:
+    - ✓ Added published_relative and modified_relative fields to QueryModel
+    - ✓ Date presets store both computed dates AND relative type ('today', 'last_7_days', 'last_30_days')
+    - ✓ QueryVisualizer shows "Today" or "Last 7 Days" instead of absolute dates when using presets
+    - ✓ Watchlists now persist dynamic date behavior
+  - ✓ Added vendors and products display in QueryVisualizer
+  - ✓ Removed CVSS slider (kept only text input)
+  - ✓ Fixed modified date label color inconsistency (now matches published label color)
+  - ✓ Build verified (685KB)
+- ✓ **Bug Fixes & Improvements** (Jan 9, 2026):
+  - ✓ Fixed mark unread for alerts (server restart required - new routes weren't loaded)
+  - ✓ Fixed watchlist rename not updating alert names (added UPDATE alerts SQL in server.js)
+  - ✓ Removed SeverityMatrix component (user found it confusing, removed from CveList.tsx)
+  - ✓ Fixed restore defaults to not overwrite custom presets (now merges with existing)
+  - ✓ Inverted hide rejected logic (default ON, toggle now says "Show Rejected CVEs")
+  - ✓ Fixed hide rejected SQL filter (value is 'REJECTED' not 'Rejected')
+  - ✓ Implemented truly dynamic relative dates for watchlists:
+    - ✓ Added getDateRangeFromRelative() helper function to matcher.js
+    - ✓ Matcher now prefers published_relative/modified_relative over absolute dates
+    - ✓ Server.js converts relative params to absolute at query time
+    - ✓ App.tsx sends relative params when available
+    - ✓ Watchlists with "Last 7 Days" now always mean 7 days from TODAY
+  - ✓ Fixed filter preset colors/icons not syncing to CVE screen:
+    - ✓ FilterPresets.tsx now listens for 'presets-updated' custom event
+    - ✓ Settings.tsx dispatches event when presets change
+    - ✓ FilterPresets now renders colors and icons (was showing names only)
+    - ✓ DEFAULT_PRESETS aligned between Settings.tsx and FilterPresets.tsx
+  - ✓ All 117 tests passing, build verified (680KB)
+- ✓ **Browser Testing Verification** (Jan 9, 2026):
+  - ✓ All fixes verified working in Chrome browser at http://127.0.0.1:17920
+  - ✓ Filter presets show correct colors/icons (red, amber, purple)
+  - ✓ Severity Matrix button confirmed removed from UI
+  - ✓ "Show Rejected CVEs" checkbox displays correctly (inverted logic)
+  - ✓ Dynamic relative dates: "Last 7 Days" auto-populates date fields
+  - ✓ "Restore Defaults" preserves custom presets (tested with "My Test Preset")
+  - ✓ Custom presets sync in real-time between Settings and CVE screen
+  - ✓ 389,831 results returned for "apache" search with filters
+- ✓ **Additional UI Fixes** (Jan 9, 2026):
+  - ✓ Added "Today" filter preset (green, calendar icon) - dynamic, always means today
+  - ✓ Fixed date filters not triggering search (hasActiveSearch now includes published_relative and modified_relative)
+  - ✓ Fixed alert watchlist name sync (already works - tested via API, existing data was stale)
+  - ✓ Added bulk "Mark All Unread" button to alerts (amber, bell icon)
+  - ✓ Added `/api/alerts/mark-all-unread` endpoint
+  - ✓ Shrunk CVSS score input (w-full -> w-20, 80px wide)
+  - ✓ Added dual pagination (controls at top AND bottom of CVE grid)
+  - ✓ Bottom pagination scrolls grid to top when used (smooth scroll)
+  - ✓ All 117 unit tests passing, build verified (682KB)
+- ✓ **Preset Query Editing & Clear Filter Improvements** (Jan 9, 2026):
+  - ✓ Added full query editor to Settings preset management:
+    - ✓ Search Text input field
+    - ✓ Min CVSS number input (0-10)
+    - ✓ Date Filter dropdown (Today, Last 7/30/90 Days)
+    - ✓ KEV Only checkbox
+  - ✓ Added "CLEAR FILTERS" button to no-results empty state:
+    - ✓ Button appears directly in "NO RESULTS MATCH YOUR SEARCH" message
+    - ✓ Provides obvious escape path when filters return zero results
+    - ✓ Clears all filters: text, CVSS, dates, vendors, products, KEV
+  - ✓ All 117 unit tests passing, build verified (685KB)
+- ✓ **Additional UI/UX Fixes** (Jan 9, 2026):
+  - ✓ Added missing filter options to preset editor in Settings:
+    - ✓ Modified date filter dropdown (matches Published filter)
+    - ✓ Vendors input (comma-separated list)
+    - ✓ Products input (comma-separated list)
+  - ✓ Fixed alert badge overlapping bell icon when sidebar collapsed:
+    - ✓ Repositioned badge further right (-right-3) and up (-top-2)
+    - ✓ Made badge smaller (16x16px, 9px font)
+    - ✓ Added black border for better visibility
+  - ✓ Fixed reference links in CVE list grid:
+    - ✓ Bug: `cve.references[0]` was object `{url,tags}` not string
+    - ✓ Fix: Now extracts `.url` property for href
+  - ✓ Verified workarounds/solutions display:
+    - ✓ Database has 3,261 workarounds and 16,026 solutions
+    - ✓ UI sections render correctly when data exists
+    - ✓ Most CVEs don't have this data (it's optional in CVE 5.0 schema)
+  - ✓ All 117 unit tests passing, build verified (686KB)
+- ✓ **CVSS-BT & Trickest Job Logging** (Jan 9, 2026):
+  - ✓ Fixed CVSS-BT and Trickest ingestion not appearing in job logs
+  - ✓ Refactored both modules to use JobLogger and job_runs table like NVD ingestion
+  - ✓ Created new `run()` functions that return jobId for background tracking
+  - ✓ Updated server endpoints to return HTTP 202 with jobId
+  - ✓ Both jobs now show progress, phase, item counts in Jobs UI
+  - ✓ Added legacy function wrappers for backwards compatibility
+- ✓ **CVE Detail Exploit Section Improvements** (Jan 9, 2026):
+  - ✓ Fixed badge-to-exploit source mismatch:
+    - ✓ Badges now driven by actual exploit data, not CVSS-BT boolean flags
+    - ✓ Added counts to badges (e.g., "GitHub (15)")
+    - ✓ Clicking badge scrolls to corresponding section
+  - ✓ Added missing CISA and HackerOne exploit sections
+  - ✓ Added scroll indicators to exploit lists:
+    - ✓ Created reusable ScrollableList component
+    - ✓ Shows gradient fade at bottom when more content exists
+    - ✓ Animated chevron hint for scrollability
+    - ✓ Top fade appears when scrolled down
+    - ✓ Auto-detects if content is scrollable (threshold: 5 items)
+  - ✓ All 48 matcher tests passing, build verified (365KB)
+- ✓ **CVE Navigation Improvements** (Jan 9, 2026):
+  - ✓ Made REFERENCES section collapsible (matches other sections)
+  - ✓ Added Prev/Next CVE navigation buttons to detail view:
+    - ✓ Navigate between CVEs without returning to list
+    - ✓ Keyboard shortcuts: Arrow Left/Right, J/K (vim-style), Escape to return
+    - ✓ Position indicator shows "5 / 100" format
+  - ✓ Added sticky list position on back navigation:
+    - ✓ Scroll position saved when clicking CVE row
+    - ✓ Position restored when returning from detail view
+    - ✓ Last-viewed CVE highlighted with cyan pulse animation (1.5s fade)
+  - ✓ Implemented split pane layout option:
+    - ✓ Toggle button in header (Columns/LayoutList icons)
+    - ✓ Layout mode persisted to localStorage
+    - ✓ Left panel: Compact CVE list (420px) with simplified columns (ID + CVSS only)
+    - ✓ Right panel: Full CVE detail view or placeholder prompt
+    - ✓ Selected CVE highlighted with cyan left border
+    - ✓ Filter presets, watchlist dropdown, advanced filters hidden in split mode
+    - ✓ Back button hidden in split mode (just click another CVE)
+  - ✓ Build verified (372KB)
 
 ## Critical Missing Features
 
@@ -368,11 +589,56 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
 - ✓ Enhance alert generation with deduplication and error handling
 - ✓ Add watchlist match count tracking
 
-### EPSS Integration
-- [ ] Research EPSS data source (FIRST.org API or CSV)
-- [ ] Add EPSS score ingestion logic
-- [ ] Populate epssScore field in CVE records
-- [ ] Display EPSS scores in UI
+### CVSS-BT Enrichment (PRIMARY - includes EPSS) - COMPLETED (Jan 9, 2026)
+Source: https://github.com/t0sche/cvss-bt
+Daily updated CSV with temporal CVSS scores, EPSS, and exploit maturity from multiple threat intel sources.
+
+**Data Lineage (Verified):**
+- CISA KEV (US Government) - Authoritative
+- EPSS/FIRST.org (Industry standard, 200+ members) - Authoritative
+- NVD/NIST (US Government) - Authoritative
+- Metasploit/Rapid7 (Public company) - Highly credible
+- VulnCheck KEV (Commercial) - Credible
+- Nuclei/ProjectDiscovery (Open source, 11k+ templates) - Credible
+- ExploitDB/OffSec (Kali maintainers) - Highly credible
+
+- ✓ Created `cve_temporal` table for enrichment data (db.js)
+- ✓ Created ingestion module (`src/lib/ingest/cvssbt.js`):
+  - ✓ Downloads CSV from GitHub with streaming parser
+  - ✓ Extracts EPSS score, exploit maturity, CVSS-BT score/severity
+  - ✓ Extracts source indicators: CISA KEV, VulnCheck KEV, Metasploit, Nuclei, ExploitDB, GitHub PoC
+  - ✓ Batch upserts to cve_temporal table (5000 per transaction)
+- ✓ Added `POST /api/ingest/cvss-bt` endpoint for manual sync
+- ✓ Extended `/api/cves/:id` endpoint to return temporal enrichment data
+- ✓ Added "SYNC CVSS-BT" button to Jobs UI (purple theme, Zap icon)
+- ✓ Display in CVE detail (CveDetail.tsx):
+  - ✓ EPSS score with percentage display
+  - ✓ Exploit Maturity badge (color-coded: red=Attacked, orange=High, yellow=Functional, cyan=PoC, gray=Unproven)
+  - ✓ CVSS-BT adjusted score
+  - ✓ Exploit source indicators (CISA KEV, VulnCheck KEV, Metasploit, Nuclei, ExploitDB, GitHub PoC)
+- ✓ Added filters to CVE search (CveList.tsx):
+  - ✓ MIN EPSS % input (0-100, stored as 0-1)
+  - ✓ Exploit Maturity dropdown (Attacked/High/Functional/PoC/Unproven)
+- ✓ Updated types.ts with exploit_maturity filter option
+- ✓ Build verified (352KB bundle)
+
+### Trickest CVE PoC Links (COMPLETED - Jan 9, 2026)
+Source: https://github.com/trickest/cve
+Direct links to exploit code repositories and security advisories.
+
+**Data Lineage (Verified):**
+- CVEProject/cvelist (MITRE) - Authoritative
+- HackerOne disclosed reports - Highly credible
+- GitHub PoC repositories - Community sourced (unvetted)
+
+- [x] Clone/pull trickest/cve repository
+- [x] Parse markdown files to extract:
+  - [x] GitHub exploit repository URLs
+  - [x] PoC reference links (advisories, analyses)
+- [x] Create `cve_exploits` table for exploit links
+- [x] Update CVE detail with collapsible "EXPLOIT REFERENCES" section
+- [x] Add "SYNC TRICKEST" button to Jobs UI
+- [ ] Schedule periodic sync (optional future enhancement)
 
 ## UI Improvements
 
@@ -421,6 +687,34 @@ LocalCVE has basic CVE ingestion and viewing capabilities. Core infrastructure i
   - ✓ Added CVSS version-specific tests (2.0, 3.0, 3.1)
   - ✓ Added alert generation and deduplication tests
   - ✓ Added FTS5 search operation tests
+
+## Security Compliance
+
+### CodeGuard Security Review (Jan 9, 2026) - COMPLETED
+Full audit against 22 CodeGuard instruction files:
+
+**COMPLIANT:**
+- Input validation and injection prevention (SQL parameterization, FTS5 escaping, body size limits)
+- OS command injection (git commands use hardcoded URLs, spawnSync with structured args)
+- Path traversal protection (path.resolve + directory containment check)
+- Rate limiting (200 req/min per IP)
+- Security headers (CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy)
+- XSS protection (React auto-escaping, no raw HTML insertion)
+- Cryptography (SHA-256 correctly implemented)
+- No hardcoded credentials in source
+- Supply chain (package-lock.json and bun.lock present)
+- Error handling (does not leak sensitive info)
+- Logging (structured, sanitized)
+
+**FIXED:**
+- Removed API key exposure from vite.config.ts (was exposing GEMINI_API_KEY to client bundle)
+- Changed dev server host from 0.0.0.0 to localhost (prevents LAN exposure)
+- Added security comments for CDN usage (documented dev-only pattern)
+
+**ACCEPTABLE FOR LOCAL-FIRST APP:**
+- CORS set to '*' (server only listens on 127.0.0.1)
+- No authentication (local-first single-user app)
+- CDN scripts in dev mode (production build is self-contained)
 
 ## Documentation
 - [ ] Document watchlist query syntax

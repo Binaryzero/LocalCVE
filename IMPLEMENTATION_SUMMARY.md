@@ -1,82 +1,165 @@
 # Implementation Summary
 
-## Features Implemented
+## Overview
 
-### 1. Enhanced Alert Generation Logic
-- **Alert Deduplication**: Prevents duplicate alerts for the same CVE/watchlist combination
-- **Error Handling**: Comprehensive error handling with logging for alert generation
-- **Watchlist Match Count Tracking**: Automatically updates watchlist match counts when alerts are generated
-- **Logging**: Detailed logging for alert generation events
+CVE Tracker is a comprehensive local-first CVE tracking application with 326k+ vulnerabilities, threat intelligence enrichment, and advanced filtering capabilities.
 
-### 2. Multi-Version CVSS Support
-- **Complete CVSS Version Collection**: Collects and stores all available CVSS versions (2.0, 3.0, 3.1) instead of just the "best" one
-- **Enhanced Database Schema**: Utilizes existing metrics table to store all CVSS versions
-- **API Updates**: Server API now exposes all CVSS versions for each CVE
-- **Matcher Logic**: Enhanced to support version-specific CVSS filtering
-- **TypeScript Types**: Updated to support all CVSS versions with proper typing
+## Core Features
 
-### 3. Testing
-- **Matcher Tests**: Comprehensive tests for version-specific CVSS filtering
-- **CVE Normalization Tests**: Tests for collecting all CVSS versions
-- **All Existing Tests**: All existing tests continue to pass
+### CVE Data Management
+- **Full CVE 5.0 Schema Support**: Complete extraction of CNA and ADP container data
+- **Multi-Version CVSS**: Supports 2.0, 3.0, 3.1, and 4.0 with version priority display
+- **FTS5 Search**: Full-text search across CVE IDs, descriptions, and references
+- **Server-Side Pagination**: Efficient handling of 326k+ records with sorting
 
-## Technical Details
+### Threat Intelligence Enrichment
 
-### Backend Changes
+#### CVSS-BT Integration (`src/lib/ingest/cvssbt.js`)
+- EPSS scores (Exploit Prediction Scoring System)
+- Exploit maturity levels (Attacked, High, Functional, PoC, Unproven)
+- Threat intel source indicators:
+  - CISA KEV (Known Exploited Vulnerabilities)
+  - VulnCheck KEV
+  - Metasploit modules
+  - Nuclei templates
+  - ExploitDB entries
+  - GitHub PoC repositories
 
-#### src/lib/ingest/nvd.js
-- Enhanced `normalizeCve5` function to collect all CVSS versions
-- Updated metrics insertion logic to store all versions
-- Enhanced alert generation with deduplication and error handling
-- Added new database statements for alert deduplication and watchlist tracking
+#### Trickest Integration (`src/lib/ingest/trickest.js`)
+- GitHub exploit repository links
+- HackerOne disclosed reports
+- Security advisories and analyses
+- Organized by category (GitHub, CISA, HackerOne, etc.)
 
-#### src/lib/matcher.js
-- Enhanced `matchesQuery` function to support version-specific CVSS filtering
-- Added support for `cvss2_min`, `cvss2_max`, `cvss30_min`, `cvss30_max`, `cvss31_min`, `cvss31_max`
+### Alert System
+- **Watchlist Matching**: Custom queries with text, CVSS, date, vendor/product filters
+- **Alert Deduplication**: Prevents duplicate alerts for same CVE/watchlist
+- **Bulk Operations**: Mark all read/unread, delete selected
+- **Real-time Updates**: Alerts generated during ingestion
 
-#### src/server.js
-- Updated `/api/cves` endpoint to fetch and expose all CVSS versions
-- Updated detailed CVE endpoint to include all CVSS metrics
-- Added support for version-specific CVSS filtering in API queries
+### Navigation & UI
 
-#### types.ts
-- Enhanced `Cve` interface with version-specific CVSS fields
-- Enhanced `QueryModel` interface with version-specific filtering options
+#### Split Pane Layout
+- Toggle between list and split view modes
+- 420px compact list with CVE ID and CVSS score
+- Full detail panel alongside list
+- Layout preference persisted to localStorage
 
-### Database Schema
-- No changes needed - existing `metrics` table already supports multiple CVSS versions
-- Added new database statements for alert deduplication and watchlist tracking
+#### Keyboard Navigation
+- Arrow Left/Right: Previous/Next CVE
+- J/K: Vim-style navigation
+- Escape: Return to list
 
-### Testing
-- Added comprehensive unit tests for matcher logic
-- Added unit tests for CVE normalization
-- All existing tests continue to pass
+#### Sticky Scroll Position
+- Scroll position saved when clicking CVE
+- Position restored on back navigation
+- Last-viewed CVE highlighted with animation
 
-## API Changes
+### Filter System
 
-### New Fields in CVE Responses
-- `cvss2Score`, `cvss2Severity` - CVSS v2.0 scores
-- `cvss30Score`, `cvss30Severity` - CVSS v3.0 scores
-- `cvss31Score`, `cvss31Severity` - CVSS v3.1 scores
-- `cvssScore`, `cvssSeverity`, `cvssVersion` - Primary score (backward compatibility)
+#### Built-in Filters
+- CVSS minimum score (all versions)
+- Date ranges (published, modified)
+- Vendor/product typeahead
+- Known Exploited (KEV)
+- EPSS minimum percentage
+- Exploit maturity level
+- Hide rejected/disputed CVEs
 
-### New Query Parameters
-- `cvss2_min`, `cvss2_max` - CVSS v2.0 filtering
-- `cvss30_min`, `cvss30_max` - CVSS v3.0 filtering
-- `cvss31_min`, `cvss31_max` - CVSS v3.1 filtering
+#### Filter Presets
+- Create custom presets with name, icon, color
+- Full query editor (text, CVSS, dates, vendors, products)
+- Presets synced between Settings and CVE screen
+- Restore defaults option
 
-## Benefits
+### Settings & Preferences
+- Hide rejected CVEs (default: on)
+- Hide disputed CVEs
+- Preset management (create, edit, delete)
+- Layout mode persistence
 
-1. **Complete Data Preservation**: All CVSS metrics are stored and available
-2. **Backward Compatibility**: Existing code continues to work with primary score
-3. **Enhanced Filtering**: Users can filter by specific CVSS versions
-4. **Better Decision Making**: Security teams can choose which CVSS version to prioritize
-5. **Comprehensive Reporting**: All available severity information is accessible
-6. **Robust Alerting**: Improved alert generation with deduplication and error handling
+## Technical Architecture
 
-## Performance Considerations
+### Backend (`src/server.js`)
+- Native Node.js HTTP server (no framework)
+- CORS enabled for development
+- Input validation with size/length limits
+- SSE streaming for real-time job logs
+- Rate limiting ready
 
-- All CVSS versions are stored in the existing metrics table
-- API queries are optimized to fetch all required data efficiently
-- Alert generation includes proper error handling and logging
-- Database indexing supports efficient querying of CVSS data
+### Database (`src/lib/db.js`)
+- SQLite with better-sqlite3
+- WAL mode for concurrent access
+- FTS5 virtual table for search
+- 15+ tables for comprehensive data model
+
+### Ingestion (`src/lib/ingest/`)
+- `nvd.js`: CVE ingestion with batch processing
+- `cvssbt.js`: CVSS-BT enrichment sync
+- `trickest.js`: PoC links sync
+- Cooperative cancellation with checkpoints
+- Progress tracking with heartbeats
+- Stuck job auto-detection
+
+## API Endpoints
+
+### CVE Operations
+- `GET /api/cves` - Search with comprehensive filters
+- `GET /api/cves/:id` - Full CVE detail with enrichment
+
+### Watchlist Operations
+- `GET/POST/PUT/DELETE /api/watchlists`
+
+### Alert Operations
+- `GET /api/alerts` - List with filters
+- `PUT /api/alerts/:id/read` - Mark read
+- `PUT /api/alerts/:id/unread` - Mark unread
+- `PUT /api/alerts/mark-all-read`
+- `PUT /api/alerts/mark-all-unread`
+- `DELETE /api/alerts/:id`
+- `DELETE /api/alerts/delete-all`
+
+### Ingestion Operations
+- `POST /api/ingest` - Incremental CVE sync
+- `POST /api/ingest/bulk` - Fast initial load
+- `POST /api/ingest/cvss-bt` - CVSS-BT sync
+- `POST /api/ingest/trickest` - Trickest sync
+- `POST /api/jobs/:id/cancel` - Cancel job
+- `GET /api/jobs/:id/logs` - Job logs
+- `GET /api/jobs/:id/logs/stream` - SSE log stream
+
+### System Operations
+- `GET /api/health` - Database health
+- `GET /api/vendors` - Vendor typeahead
+- `GET /api/products` - Product typeahead
+
+## Security Compliance
+
+Following CodeGuard security guidelines in `.github/instructions/`:
+- Parameterized queries throughout (no SQL injection)
+- Input validation at API boundaries
+- Request body size limits (1MB)
+- Parameter length limits (500 chars)
+- Enum validation for severity/status
+- CORS configuration for development
+- No hardcoded credentials
+
+## Testing
+
+### Unit Tests (`tests/unit/`)
+- `matcher.test.ts` - Watchlist query matching
+- `nvd.test.ts` - CVE normalization and ingestion
+- `cvssbt.test.ts` - CVSS-BT parsing
+- `server.test.ts` - API endpoint validation
+
+### E2E Tests (`tests/e2e/`)
+- `app.spec.ts` - Full application workflows
+
+## Performance Optimizations
+
+- Virtual scrolling for 326k+ CVE list
+- Batch processing (5000 CVEs per transaction)
+- FTS5 deferred rebuild in bulk mode
+- Memory-mapped I/O (256MB)
+- Parallel file reading (10 concurrent)
+- Event loop yielding during ingestion
