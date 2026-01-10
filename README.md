@@ -4,12 +4,24 @@ A local-first application for tracking Common Vulnerabilities and Exposures (CVE
 
 ## Features
 
-- **Search-First Interface** - Full-text search across 250k+ CVEs with FTS5
-- **Multi-Version CVSS Support** - Filter by CVSS 2.0, 3.0, and 3.1 scores
+### Core Functionality
+- **Search-First Interface** - Full-text search across 326k+ CVEs with FTS5
+- **Multi-Version CVSS Support** - Filter by CVSS 2.0, 3.0, 3.1, and 4.0 scores
 - **Watchlists** - Define custom queries to monitor specific vulnerability patterns
 - **Alert Generation** - Automatic notifications when new CVEs match your watchlists
-- **KEV Integration** - Filter for Known Exploited Vulnerabilities
 - **Local Storage** - All data stored in SQLite, no cloud dependencies
+
+### Threat Intelligence Enrichment
+- **CVSS-BT Integration** - EPSS scores, exploit maturity, and threat intel sources
+- **Trickest PoC Links** - GitHub exploit repositories and security advisories
+- **CISA KEV** - Known Exploited Vulnerabilities flagging
+
+### Navigation & UI
+- **Split Pane Layout** - Side-by-side CVE list and detail view
+- **Prev/Next Navigation** - Browse CVEs with keyboard shortcuts (Arrow, J/K, Escape)
+- **Sticky Scroll Position** - Return to your place in the list with highlight animation
+- **Filter Presets** - Save and manage custom filter configurations
+- **Settings Page** - Hide rejected/disputed CVEs, manage preferences
 
 ## Prerequisites
 
@@ -113,9 +125,16 @@ React Frontend
 Query parameters:
 - `search` - Full-text search query
 - `cvss_min` / `cvss_max` - CVSS score range (0-10)
-- `cvss2_min` / `cvss30_min` / `cvss31_min` - Version-specific CVSS filters
+- `cvss2_min` / `cvss30_min` / `cvss31_min` / `cvss40_min` - Version-specific CVSS filters
 - `severity` - LOW, MEDIUM, HIGH, or CRITICAL
 - `kev` - Filter for Known Exploited Vulnerabilities
+- `vendors` / `products` - Comma-separated lists for affected software filtering
+- `published_from` / `published_to` - Date range filters (ISO format)
+- `modified_from` / `modified_to` - Modified date range filters
+- `epss_min` - Minimum EPSS score (0-1)
+- `exploit_maturity` - Filter by exploit maturity level
+- `hide_rejected` / `hide_disputed` - Exclude rejected/disputed CVEs
+- `sort_by` / `sort_order` - Column sorting (id, score, published; asc/desc)
 - `limit` / `offset` - Pagination (default limit: 100, max: 1000)
 
 ### Watchlists
@@ -137,12 +156,26 @@ Query parameters:
 | PUT | `/api/alerts/mark-all-read` | Mark all alerts read |
 | DELETE | `/api/alerts/delete-all` | Delete all alerts |
 
-### Jobs
+### Jobs & Ingestion
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/jobs` | List ingestion jobs |
-| POST | `/api/ingest` | Start CVE ingestion |
+| POST | `/api/ingest` | Start CVE ingestion (incremental) |
+| POST | `/api/ingest/bulk` | Start bulk ingestion (faster initial load) |
+| POST | `/api/ingest/cvss-bt` | Sync CVSS-BT enrichment data |
+| POST | `/api/ingest/trickest` | Sync Trickest PoC links |
+| POST | `/api/jobs/:id/cancel` | Cancel running job |
+| GET | `/api/jobs/:id/logs` | Get job logs |
+| GET | `/api/jobs/:id/logs/stream` | SSE stream for real-time logs |
+
+### System
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Database health and completeness |
+| GET | `/api/vendors` | Typeahead for vendor filtering |
+| GET | `/api/products` | Typeahead for product filtering |
 
 ## Data Storage
 
@@ -174,13 +207,12 @@ Ensure you're running with `npm start` (not manual `node src/server.js`)
 
 Only one ingestion can run at a time. Wait for current job to complete.
 
-## Documentation
+## Security
 
-Comprehensive user guides are organized in the `docs/` directory:
-- `user-guide/getting-started.md` - Setup and basic usage
-- `user-guide/watchlists.md` - Creating and managing watchlists
-- `user-guide/alert-management.md` - Handling alerts
-- `admin-guide/ingestion-optimization.md` - Advanced ingestion configuration
+This project follows security best practices documented in `.github/instructions/`:
+- Input validation and injection defense (parameterized queries)
+- API security (rate limiting, CORS, validation)
+- Logging with redaction of sensitive data
 
 ## License
 
