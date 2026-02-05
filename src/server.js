@@ -189,7 +189,7 @@ async function handleRequest(req, res) {
         return sendJson(res, { status: 'Ingestion started', jobId }, 202);
       } catch (e) {
         console.error("Failed to start ingestion job:", e);
-        return sendError(res, 'Failed to start ingestion job: ' + e.message, 500);
+        return sendError(res, 'Failed to start ingestion job', 500);
       }
     }
 
@@ -201,7 +201,7 @@ async function handleRequest(req, res) {
         return sendJson(res, { status: 'Bulk ingestion started (fast mode)', jobId }, 202);
       } catch (e) {
         console.error("Failed to start bulk ingestion job:", e);
-        return sendError(res, 'Failed to start bulk ingestion job: ' + e.message, 500);
+        return sendError(res, 'Failed to start bulk ingestion job', 500);
       }
     }
 
@@ -213,7 +213,7 @@ async function handleRequest(req, res) {
         return sendJson(res, { status: 'CVSS-BT enrichment started', jobId }, 202);
       } catch (e) {
         console.error("Failed to start CVSS-BT sync:", e);
-        return sendError(res, 'Failed to start CVSS-BT sync: ' + e.message, 500);
+        return sendError(res, 'Failed to start CVSS-BT sync', 500);
       }
     }
 
@@ -225,7 +225,7 @@ async function handleRequest(req, res) {
         return sendJson(res, { status: 'Trickest sync started', jobId }, 202);
       } catch (e) {
         console.error("Failed to start Trickest sync:", e);
-        return sendError(res, 'Failed to start Trickest sync: ' + e.message, 500);
+        return sendError(res, 'Failed to start Trickest sync', 500);
       }
     }
 
@@ -814,12 +814,12 @@ async function handleRequest(req, res) {
         query = `
           SELECT vendor, COUNT(DISTINCT cve_id) as count
           FROM cve_products
-          WHERE vendor LIKE ?
+          WHERE vendor LIKE ? ESCAPE '\\'
           GROUP BY vendor
           ORDER BY count DESC
           LIMIT ?
         `;
-        params = [`%${q}%`, limit];
+        params = [`%${escapeLikePattern(q.trim())}%`, limit];
       } else {
         // No search - return top vendors by count
         query = `
@@ -857,8 +857,8 @@ async function handleRequest(req, res) {
       let paramIndex = 1;
 
       if (q) {
-        conditions.push(`product LIKE ?`);
-        params.push(`%${q}%`);
+        conditions.push(`product LIKE ? ESCAPE '\\'`);
+        params.push(`%${escapeLikePattern(q.trim())}%`);
         paramIndex++;
       }
       if (vendor) {
@@ -979,7 +979,8 @@ async function handleRequest(req, res) {
           status: cveCount > 0 ? (completeness && completeness >= 95 ? 'healthy' : 'incomplete') : 'empty'
         });
       } catch (err) {
-        return sendError(res, 'Failed to get health status: ' + err.message, 500);
+        console.error('Failed to get health status:', err);
+        return sendError(res, 'Failed to get health status', 500);
       }
     }
 
